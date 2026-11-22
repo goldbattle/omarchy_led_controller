@@ -30,9 +30,8 @@ led restart                                # restart OpenRGB (re-detect + re-app
 - **Advanced** (bottom of the panel): custom hex and the auto-off times.
 - **Flux** follows the sun, not the clock: white (6500K) while it's >6 deg up, 3400K at sunset,
   2700K, 1900K (candlelight) at civil dusk, then fading to pure red by nautical dusk (-12 deg);
-  mornings mirror it. The chip shows the current target. Location defaults to the time zone's
-  reference city from tzdata (`/usr/share/zoneinfo/zone1970.tab`); override with
-  `led schedule '{"location": [lat, lon]}'`.
+  mornings mirror it. The chip shows the current target. Location defaults to San Francisco;
+  change it in Advanced or with `led schedule '{"location": [lat, lon]}'`.
 
 ## Files
 | File | Installed to |

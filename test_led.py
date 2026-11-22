@@ -68,7 +68,6 @@ assert led.flux(0)[1] == "3400K" and led.flux(-6)[1] == "1900K"
 assert led.flux(1.5)[1] == "4200K"                           # warming toward sunset
 assert led.flux(-9)[1] == "1900K→red" and led.flux(-9)[0] == "FF4200"
 assert led.flux(-12) == ("FF0000", "red") and led.flux(-40) == ("FF0000", "red")
-assert led.zone_location() is not None
 
 # theme colour: the accent from colors.toml, never keyboard.rgb
 import tempfile

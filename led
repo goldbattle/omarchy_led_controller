@@ -9,7 +9,7 @@ same per-device switches. Commands print the resulting state as JSON.
   led set [RRGGBB|theme] [-m static|breathing|rainbow|flux] [-b 0-100] [-g 1.0-4.0]
   led on | led off
   led device NAME on|off          per-device power switch
-  led schedule '{"auto_off": true, "off": "22:00", "on": "09:00", "location": [lat, lon] | null}'
+  led schedule '{"auto_off": true, "off": "22:00", "on": "09:00", "location": [lat, lon]}'
   led restart                     restart the OpenRGB server (re-detects devices, re-applies)
   led tick                        run every minute by led-schedule.timer
   led watch                       run by led-idle.service: dark while all monitors are off
@@ -32,7 +32,7 @@ DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": Tru
             "auto_off": False, "off": "22:00", "on": "09:00",
             "idle_off": True,      # all LEDs off while every monitor is DPMS-off (screensaver -> black)
             "gamma": 2.8,          # screen->LED colour depth; 2.2 = textbook sRGB, higher = deeper
-            "location": None}      # flux: [lat, lon]; None = the time zone's city (tzdata)
+            "location": [37.77, -122.42]}  # flux follows the sun here (default San Francisco)
 # flux: sun elevation (degrees) -> colour temperature (K). Day white, sunset warm,
 # dusk candlelight, then fading to pure red ("darkroom") by nautical dusk.
 FLUX = [(6, 6500), (0, 3400), (-3, 2700), (-6, 1900)]
@@ -113,21 +113,6 @@ def in_window(now, off, on):
     return off <= now < on if off < on else now >= off or now < on
 
 
-def zone_location():
-    """(lat, lon) of the system time zone's reference city from tzdata: no network, no setup."""
-    try:
-        zone = os.path.realpath("/etc/localtime").split("zoneinfo/", 1)[1]
-        for line in open("/usr/share/zoneinfo/zone1970.tab"):
-            f = line.split("\t")
-            if len(f) > 2 and f[2].strip() == zone:
-                m = re.fullmatch(r"([+-])(\d\d)(\d\d)(\d\d)?([+-])(\d\d\d)(\d\d)(\d\d)?", f[1])
-                dms = lambda sg, d, mi, sec: (int(d) + int(mi) / 60 + int(sec or 0) / 3600) * (-1 if sg == "-" else 1)
-                return dms(*m.group(1, 2, 3, 4)), dms(*m.group(5, 6, 7, 8))
-    except (OSError, IndexError, TypeError):
-        pass
-    return 0.0, -time.timezone / 240  # equator at the zone's longitude: crude but never crashes
-
-
 def sun_elevation(t, lat, lon):
     """Degrees above the horizon at UTC datetime `t` (USNO low-precision formulas, ~0.1 deg)."""
     d = (t - datetime(2000, 1, 1, 12, tzinfo=timezone.utc)).total_seconds() / 86400
@@ -170,7 +155,7 @@ def flux(el):
 
 
 def flux_now(cfg):
-    lat, lon = cfg["location"] or zone_location()
+    lat, lon = cfg["location"] or DEFAULTS["location"]  # `or`: older configs stored null
     return flux(sun_elevation(datetime.now(timezone.utc), lat, lon))
 
 
@@ -301,14 +286,14 @@ def main():
             ok = (isinstance(new, dict) and isinstance(new.get("auto_off", cfg["auto_off"]), bool)
                   and isinstance(new.get("idle_off", cfg["idle_off"]), bool)
                   and all(HHMM.fullmatch(str(new.get(k, cfg[k]))) for k in ("off", "on"))
-                  and (loc is None or (isinstance(loc, list) and len(loc) == 2
-                       and all(isinstance(v, (int, float)) for v in loc)
-                       and -90 <= loc[0] <= 90 and -180 <= loc[1] <= 180)))
+                  and isinstance(loc, list) and len(loc) == 2
+                  and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in loc)
+                  and -90 <= loc[0] <= 90 and -180 <= loc[1] <= 180)
         except (ValueError, AttributeError):
             ok = False
         if not ok:
             sys.exit('expected {"auto_off": bool, "off": "HH:MM", "on": "HH:MM", '
-                     '"idle_off": bool, "location": [lat, lon] | null} (all keys optional)')
+                     '"idle_off": bool, "location": [lat, lon]} (all keys optional)')
         cfg.update({k: new[k] for k in ("auto_off", "off", "on", "idle_off", "location") if k in new})
 
     if a.cmd in ("tick", "schedule", "restore"):

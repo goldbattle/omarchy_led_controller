@@ -296,14 +296,19 @@ Panel {
             Item { Layout.fillWidth: true }
           }
 
-          Text {
+          Text { text: "Flux location (lat, lon)"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+          TextField {
             width: parent.width
-            wrapMode: Text.WordWrap
-            text: "Flux uses " + (root.st.location ? "your location " + root.st.location.join(", ")
-                  : "your time zone's city") + ". Elsewhere? led schedule '{\"location\": [lat, lon]}'"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            placeholderText: "37.77, -122.42"
+            text: root.st.location ? root.st.location.join(", ") : ""
+            foreground: root.foreground
+            onEditingFinished: {
+              var m = String(text).match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/)
+              if (!m) return
+              var loc = [Number(m[1]), Number(m[2])]
+              if (root.st.location && loc[0] === root.st.location[0] && loc[1] === root.st.location[1]) return
+              root.setSchedule({ location: loc })  // led validates the ranges
+            }
           }
         }
       }

@@ -22,6 +22,14 @@ SAMPLE = """0: EVGA GeForce RTX 3080 FTW3 Ultra LHR
 devs = led.parse(SAMPLE)
 assert [d["index"] for d in devs] == [0, 1, 3]
 assert devs[0]["modes"][3] == "Spectrum Cycle" and devs[1]["type"] == "LED Strip"
+assert [d["active"] for d in devs] == ["Rainbow Wave", "Direct", "Direct"]  # the [bracketed] mode
+
+# stuck: calls whose mode the server didn't take (device 0 reports Rainbow Wave, not Direct)
+real_openrgb = led.openrgb
+led.openrgb = lambda *a: SAMPLE
+assert led.stuck([["-d", "0", "-m", "Direct", "-c", "FF0000"], ["-d", "1", "-m", "Direct", "-c", "FF0000"],
+                  ["-d", "3", "-m", "Direct", "-c", "FF0000"]]) == [["-d", "0", "-m", "Direct", "-c", "FF0000"]]
+led.openrgb = real_openrgb
 
 assert led.build(devs, "FF8000", "static", 50) == [
     ["-d", "0", "-m", "Direct", "-c", "804000"],
@@ -103,13 +111,14 @@ sent: list[tuple[str, str]] = []
 applied: list[list[str]] = []
 led.aura_set, real_apply = (lambda c, m: sent.append((c, m))), led.apply
 led.apply = lambda args: applied.append(args)
+led.stuck, real_stuck = (lambda calls: []), led.stuck  # every mode took
 cfg2 = dict(led.DEFAULTS, color="F38D70", brightness=50, gamma=2.8)
 led.sync(cfg2, {"held": False}, devs[:1] + [board])
 assert sent == [(led.adjust("F38D70", 50, 2.8), "static")] and len(applied) == 1
 sent.clear()
 led.sync(dict(cfg2, disabled=[board["name"]]), {"held": False}, devs[:1] + [board])
 assert sent == [("000000", "off")]                      # switched off -> board dark
-led.apply = real_apply
+led.apply, led.stuck = real_apply, real_stuck
 
 # screens_off: dark only when every enabled monitor is DPMS-off; unknown -> never dark
 import subprocess as sp

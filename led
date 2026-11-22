@@ -51,6 +51,7 @@ class Device(TypedDict):
     name: str
     type: str
     modes: list[str]     # mode names exactly as the device calls them
+    active: str          # the mode it's in right now ("" if unknown)
     backend: NotRequired[str]  # "aura" for the led-aura helper; absent for OpenRGB
 
 
@@ -114,12 +115,14 @@ def parse(text: str) -> list[Device]:
     devs: list[Device] = []
     for line in text.splitlines():
         if m := re.match(r"^(\d+): (.+)$", line):
-            devs.append({"index": int(m[1]), "name": m[2].strip(), "type": "", "modes": []})
+            devs.append({"index": int(m[1]), "name": m[2].strip(), "type": "", "modes": [], "active": ""})
         elif devs and (m := re.match(r"^\s+(Type|Modes):\s+(.*)$", line)):
             if m[1] == "Type":
                 devs[-1]["type"] = m[2].strip()
             else:  # [Active] 'Two Words' Plain  -> brackets mark the active mode
                 devs[-1]["modes"] = shlex.split(m[2].replace("[", "").replace("]", ""))
+                if a := re.search(r"\[([^\]]+)\]", m[2]):
+                    devs[-1]["active"] = shlex.split(a[1])[0]
     return devs
 
 
@@ -290,7 +293,7 @@ def aura_device() -> Device | None:
     except OSError:
         board = "motherboard"
     return {"index": None, "name": f"ASUS {board}", "type": "Motherboard", "backend": "aura",
-            "modes": ["Off", "Static", "Breathing", "Spectrum Cycle"]}
+            "modes": ["Off", "Static", "Breathing", "Spectrum Cycle"], "active": ""}
 
 
 def aura_set(color: str, mode: str) -> None:
@@ -304,11 +307,22 @@ def devices() -> list[Device]:
     return devs + [a] if (a := aura_device()) else devs
 
 
+def stuck(calls: list[list[str]]) -> list[list[str]]:
+    """The `build` calls whose mode didn't take. When several devices change at once, the
+    OpenRGB server (1.1) sometimes drops a mode change: the Commander PRO stays on Rainbow
+    Wave after rainbow -> static. Sending the same call again on its own always works."""
+    active = {d["index"]: d["active"] for d in parse(openrgb("-ld"))}
+    return [c for c in calls if active.get(int(c[1])) != c[3]]
+
+
 def sync(cfg: Config, rt: Runtime, devs: list[Device]) -> None:
     on = lit(cfg, rt, devs)
     off = [d for d in devs if d not in on]
     color, mode = look(cfg)
-    for args in build(on, color, mode, cfg["brightness"], cfg["gamma"]) + build(off, "000000", "off", 100):
+    calls = build(on, color, mode, cfg["brightness"], cfg["gamma"]) + build(off, "000000", "off", 100)
+    for args in calls:
+        apply(args)
+    for args in stuck(calls):  # ponytail: one retry; loop if a device ever needs more
         apply(args)
     for d in devs:
         if d.get("backend") == "aura" and d in on:

@@ -31,6 +31,7 @@ DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": Tru
             "disabled": [],        # per-device switch off
             "auto_off": False, "off": "22:00", "on": "09:00",
             "keep_on": [],         # devices the night schedule leaves alone
+            "gamma": 2.2,          # screen->LED colour correction; raise if colours look washed out
             # daylight mode: colour fades linearly between these, wrapping midnight.
             # Fixed clock times, not real sunset; nudge them with the seasons.
             "daylight": [["06:00", "FF0000"], ["08:00", "0040FF"], ["17:00", "0040FF"],
@@ -75,8 +76,10 @@ def pick(dev, intent):
     return next((m for m in MODES[intent] if m in dev["modes"]), None)
 
 
-def build(devs, color, intent, brightness):
-    r, g, b = (round(int(color[i:i + 2], 16) * brightness / 100) for i in (0, 2, 4))
+def build(devs, color, intent, brightness, gamma=1.0):
+    # Hex colours are screen (gamma-encoded) values but LED PWM is linear: without this, pastels
+    # like a theme accent wash out to near-white. Pure colours (FF0000, ...) are unaffected.
+    r, g, b = (round((int(color[i:i + 2], 16) / 255) ** gamma * 255 * brightness / 100) for i in (0, 2, 4))
     hexc = f"{r:02X}{g:02X}{b:02X}"
     calls = []
     for d in devs:
@@ -149,7 +152,7 @@ def sync(cfg, rt, devs):
     on = lit(cfg, rt["held"], devs)
     off = [d for d in devs if d not in on]
     color, mode = look(cfg)
-    for args in build(on, color, mode, cfg["brightness"]) + build(off, "000000", "off", 100):
+    for args in build(on, color, mode, cfg["brightness"], cfg["gamma"]) + build(off, "000000", "off", 100):
         apply(args)
     rt["shown"] = color
 

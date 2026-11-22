@@ -24,6 +24,9 @@ assert led.build(devs, "FF8000", "static", 50) == [
     ["-d", "0", "-m", "Direct", "-c", "804000"],
     ["-d", "1", "-m", "Direct", "-c", "804000"],
     ["-d", "3", "-m", "Direct", "-c", "804000"]]
+# gamma: theme peach stays saturated on LEDs, pure colours untouched
+assert led.build(devs[:1], "F38D70", "static", 100, 2.2)[0][-1] == "E5452A"
+assert led.build(devs[:1], "FF0000", "static", 100, 2.2)[0][-1] == "FF0000"
 assert [c[3] for c in led.build(devs, "FF0000", "breathing", 100)] == ["Breathing", "Color Pulse", "Pulsing"]
 assert led.build(devs, "FF0000", "rainbow", 100) == [
     ["-d", "0", "-m", "Spectrum Cycle"], ["-d", "1", "-m", "Rainbow Wave"], ["-d", "3", "-m", "Color Shift"]]

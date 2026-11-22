@@ -20,6 +20,9 @@ led restart                                # restart OpenRGB (re-detect + re-app
   until morning. It stacks on any mode: auto-off devices go dark, the rest keep going.
 - **Theme** colour reads `~/.local/state/omarchy/current/theme/keyboard.rgb` (Omarchy's per-theme
   RGB colour), falling back to `accent` in `colors.toml`. A `theme-set` hook re-applies instantly.
+- **Gamma**: colours are converted from screen (sRGB) to linear LED drive (`"gamma": 2.2` in
+  `~/.config/led.json`), otherwise pastels like most theme accents show up near-white.
+  Raise it if colours still look washed out, `1.0` disables it.
 - **Advanced** (bottom of the panel): custom hex and the auto-off times.
 - **Daylight** fades between clock keyframes (default: red until 06:00 → blue 08:00–17:00 →
   orange 19:00 → red 21:00). Fixed times, not real sunset; tune them with

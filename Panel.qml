@@ -251,6 +251,21 @@ Panel {
             width: parent.width
             Text {
               Layout.fillWidth: true
+              text: "Off while screens are off"
+              color: root.st.idle_off !== false ? root.foreground : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+            ToggleSwitch {
+              checked: root.st.idle_off !== false
+              onToggled: root.setSchedule({ idle_off: !checked })
+            }
+          }
+
+          RowLayout {
+            width: parent.width
+            Text {
+              Layout.fillWidth: true
               text: "Auto off"
               color: root.st.auto_off ? root.foreground : root.dim
               font.family: root.fontFamily

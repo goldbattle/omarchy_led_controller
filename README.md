@@ -24,6 +24,9 @@ led restart                                # restart OpenRGB (re-detect + re-app
 - **Gamma**: colours are converted from screen (sRGB) to linear LED drive (`"gamma"` in
   `~/.config/led.json`, or Advanced → Colour depth), otherwise pastels like theme accents show up near-white.
   Default 2.8 (a bit deeper than textbook 2.2); `1.0` disables it.
+- **Off while screens are off** (Advanced, default on): `led watch` (`led-idle.service`) polls
+  `hyprctl monitors` every 2s and darkens everything once all monitors are DPMS-off, i.e. after
+  the screensaver/lock blanks them; lights return within ~2s of waking.
 - **Advanced** (bottom of the panel): custom hex and the auto-off times.
 - **Daylight** fades between clock keyframes (default: red until 06:00 → blue 08:00–17:00 →
   orange 19:00 → red 21:00). Fixed times, not real sunset; tune them with
@@ -34,6 +37,7 @@ led restart                                # restart OpenRGB (re-detect + re-app
 |---|---|
 | `manifest.json`, `Panel.qml`, `led` | `~/.config/omarchy/plugins/com.pgeneva.omarchy_led_controller/` (`led` also linked into `~/.local/bin`) |
 | `systemd/openrgb.service` | user unit: OpenRGB server, runs `led restore` at login |
+| `systemd/led-idle.service` | user unit (graphical session): `led watch` |
 | `systemd/led-schedule.{service,timer}` | user units: `led tick` every minute (auto-off, daylight fade, theme drift) |
 | `hooks/led-theme-set` | `~/.config/omarchy/hooks/theme-set.d/` |
 

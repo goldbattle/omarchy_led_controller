@@ -14,6 +14,7 @@ same per-device switches. Commands print the resulting state as JSON.
                  "daylight": [["08:00", "0040FF"], ["19:00", "FF6000"], ...]}'
   led restart                     restart the OpenRGB server (re-detects devices, re-applies)
   led tick                        run every minute by led-schedule.timer
+  led watch                       run by led-idle.service: dark while all monitors are off
   led restore                     run at login by openrgb.service
 """
 import argparse, json, os, re, shlex, subprocess, sys, time
@@ -30,15 +31,18 @@ CONFIG = Path.home() / ".config/led.json"
 DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": True,
             "disabled": [],        # per-device switch off
             "auto_off": False, "off": "22:00", "on": "09:00",
+            "idle_off": True,      # all LEDs off while every monitor is DPMS-off (screensaver -> black)
             "keep_on": [],         # devices the night schedule leaves alone
             "gamma": 2.8,          # screen->LED colour depth; 2.2 = textbook sRGB, higher = deeper
             # daylight mode: colour fades linearly between these, wrapping midnight.
             # Fixed clock times, not real sunset; nudge them with the seasons.
             "daylight": [["06:00", "FF0000"], ["08:00", "0040FF"], ["17:00", "0040FF"],
                          ["19:00", "FF6000"], ["21:00", "FF0000"]]}
-# {"window": last seen in-window bool, "held": schedule is holding lights off}.
+# {"window": last seen in-window bool, "held": schedule is holding lights off,
+#  "idle": monitors are off (set by `led watch`)}.
 # In /run so a reboot forgets it and the next tick re-evaluates.
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "led-schedule.json"
+RT_DEFAULT = {"window": None, "held": False, "idle": False}
 THEME = Path.home() / ".local/state/omarchy/current/theme"
 HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
@@ -131,10 +135,37 @@ def look(cfg):
     return theme_color() if cfg["color"] == "theme" else cfg["color"], cfg["mode"]
 
 
-def lit(cfg, held, devs):
+def lit(cfg, rt, devs):
     """The one rule for which devices should be on."""
-    return [d for d in devs if cfg["power"] and d["name"] not in cfg["disabled"]
-            and not (held and d["name"] not in cfg["keep_on"])]
+    if not cfg["power"] or (rt.get("idle") and cfg["idle_off"]):
+        return []
+    return [d for d in devs if d["name"] not in cfg["disabled"]
+            and not (rt["held"] and d["name"] not in cfg["keep_on"])]
+
+
+def screens_off():
+    """True when every enabled monitor is DPMS-off (Omarchy blanks them after the lock screen)."""
+    try:
+        r = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True, timeout=5)
+        mons = [m for m in json.loads(r.stdout) if not m.get("disabled")]
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False  # can't tell: never darken on a guess
+    return bool(mons) and not any(m.get("dpmsStatus", True) for m in mons)
+
+
+def watch():
+    # ponytail: polls every 2s (hyprctl ~7ms); Hyprland has no DPMS event on socket2 to subscribe to.
+    while True:
+        off = screens_off()
+        rt = load(RUNTIME, RT_DEFAULT)
+        if off != bool(rt.get("idle")):
+            rt["idle"] = off
+            try:
+                sync(load(CONFIG, DEFAULTS), rt, parse(openrgb("-ld")))
+                save(RUNTIME, rt)
+            except SystemExit as e:  # openrgb hiccup: log and retry next poll
+                print(f"led watch: {e}", file=sys.stderr, flush=True)
+        time.sleep(2)
 
 
 def load(path, default):
@@ -149,7 +180,7 @@ def save(path, data):
 
 
 def sync(cfg, rt, devs):
-    on = lit(cfg, rt["held"], devs)
+    on = lit(cfg, rt, devs)
     off = [d for d in devs if d not in on]
     color, mode = look(cfg)
     for args in build(on, color, mode, cfg["brightness"], cfg["gamma"]) + build(off, "000000", "off", 100):
@@ -164,7 +195,7 @@ def toggle(lst, name, include):
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("state", "on", "off", "tick", "restore", "restart"):
+    for name in ("state", "on", "off", "tick", "restore", "restart", "watch"):
         sub.add_parser(name)
     s = sub.add_parser("set")
     s.add_argument("color", nargs="?", type=lambda c: "theme" if c == "theme" else re.fullmatch(r"#?([0-9a-fA-F]{6})", c)[1].upper())
@@ -184,7 +215,9 @@ def main():
             sys.exit(r.stderr.strip())
         a.cmd = "state"
 
-    cfg, rt = load(CONFIG, DEFAULTS), load(RUNTIME, {"window": None, "held": False})
+    if a.cmd == "watch":
+        watch()
+    cfg, rt = load(CONFIG, DEFAULTS), load(RUNTIME, RT_DEFAULT)
     devs = parse(openrgb("-ld"))
     names = {d["name"] for d in devs}
     if getattr(a, "name", None) and a.name not in names:
@@ -210,6 +243,7 @@ def main():
             new = json.loads(a.json)
             keys = new.get("daylight", cfg["daylight"])
             ok = (isinstance(new, dict) and isinstance(new.get("auto_off", cfg["auto_off"]), bool)
+                  and isinstance(new.get("idle_off", cfg["idle_off"]), bool)
                   and all(HHMM.fullmatch(str(new.get(k, cfg[k]))) for k in ("off", "on"))
                   and isinstance(keys, list) and keys and all(
                       isinstance(k, list) and len(k) == 2 and HHMM.fullmatch(str(k[0]))
@@ -218,8 +252,8 @@ def main():
             ok = False
         if not ok:
             sys.exit('expected {"auto_off": bool, "off": "HH:MM", "on": "HH:MM", '
-                     '"daylight": [["HH:MM", "RRGGBB"], ...]} (all keys optional)')
-        cfg.update({k: new[k] for k in ("auto_off", "off", "on", "daylight") if k in new})
+                     '"idle_off": bool, "daylight": [["HH:MM", "RRGGBB"], ...]} (all keys optional)')
+        cfg.update({k: new[k] for k in ("auto_off", "off", "on", "idle_off", "daylight") if k in new})
 
     if a.cmd in ("tick", "schedule", "restore"):
         window = cfg["auto_off"] and in_window(time.strftime("%H:%M"), cfg["off"], cfg["on"])

@@ -1,0 +1,12 @@
+[Unit]
+Description=LEDs off while all monitors are off (led watch)
+PartOf=graphical-session.target
+After=graphical-session.target openrgb.service
+
+[Service]
+ExecStart=%h/.local/bin/led watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

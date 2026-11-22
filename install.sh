@@ -17,6 +17,7 @@ ln -sf "$dest/led" ~/.local/bin/led
 install -m644 systemd/* ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now openrgb.service led-schedule.timer
+systemctl --user enable led-idle.service && systemctl --user restart led-idle.service  # picks up new `led`
 
 omarchy hook install theme-set hooks/led-theme-set >/dev/null
 

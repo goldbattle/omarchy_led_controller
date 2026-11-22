@@ -40,9 +40,13 @@ assert led.build(devs, "FFFFFF", "off", 100) == [
 # which devices are lit: power, per-device switch, night hold, keep_on
 GPU, CMD, AIO = (d["name"] for d in devs)
 cfg = dict(led.DEFAULTS, disabled=[CMD], keep_on=[AIO])
-names = lambda held: [d["name"] for d in led.lit(cfg, held, devs)]
+names = lambda held, idle=False: [d["name"] for d in led.lit(cfg, {"held": held, "idle": idle}, devs)]
 assert names(False) == [GPU, AIO]          # Commander switched off
 assert names(True) == [AIO]                # night: only keep_on survives, still minus disabled
+assert names(False, idle=True) == []       # monitors off: everything dark, keep_on included
+cfg["idle_off"] = False
+assert names(False, idle=True) == [GPU, AIO]  # ...unless the Advanced toggle is off
+cfg["idle_off"] = True
 cfg["power"] = False
 assert names(False) == []                  # global off beats everything
 
@@ -70,6 +74,21 @@ with tempfile.TemporaryDirectory() as d:
     assert led.theme_color() == "F38D70"
     (led.THEME / "keyboard.rgb").write_text("#ff00ff\n")  # tokyo-night style override: ignored
     assert led.look(dict(led.DEFAULTS, color="theme")) == ("F38D70", "static")
+
+# screens_off: dark only when every enabled monitor is DPMS-off; unknown -> never dark
+import subprocess as sp
+def fake_hyprctl(mons):
+    led.subprocess.run = lambda *a, **k: sp.CompletedProcess(a, 0, stdout=__import__("json").dumps(mons))
+real_run = led.subprocess.run
+fake_hyprctl([{"dpmsStatus": False}, {"dpmsStatus": False}, {"dpmsStatus": True, "disabled": True}])
+assert led.screens_off()
+fake_hyprctl([{"dpmsStatus": False}, {"dpmsStatus": True}])
+assert not led.screens_off()
+fake_hyprctl([])
+assert not led.screens_off()
+led.subprocess.run = lambda *a, **k: sp.CompletedProcess(a, 1, stdout="")
+assert not led.screens_off()
+led.subprocess.run = real_run
 
 # retry path: fake openrgb that demands 2 colours the first time
 calls = []

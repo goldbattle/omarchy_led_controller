@@ -95,4 +95,7 @@ calls = []
 led.openrgb = lambda *a: calls.append(list(a)) or ("Please provide between 2 and 2 colors" if len(calls) == 1 else "")
 led.apply(["-d", "1", "-m", "Color Pulse", "-c", "FF0000"])
 assert calls[1][-1] == "FF0000,FF0000"
+calls.clear()  # rainbow fallback without a colour (H150i "Color Shift" wants 2)
+led.apply(["-d", "3", "-m", "Color Shift"])
+assert calls[1][-2:] == ["-c", "FF0000,0000FF"]
 print("ok")

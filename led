@@ -50,12 +50,20 @@ def openrgb(*args):
     return r.stdout + r.stderr  # exit code is 0 even on errors; callers check the text
 
 
+RAINBOWISH = ["FF0000", "0000FF", "00FF00"]  # for "rainbow" on devices that can only shift between N colours
+
+
 def apply(args):
     out = openrgb(*args)
-    if (m := re.search(r"between (\d+) and", out)) and "-c" in args:
-        # some modes want N colours (Commander "Color Pulse" = 2): repeat ours
-        i = args.index("-c") + 1
-        args[i] = ",".join([args[i]] * int(m[1]))
+    if m := re.search(r"between (\d+) and", out):
+        # some modes want N colours: repeat ours (Commander "Color Pulse" = 2), or for
+        # colourless rainbow fallbacks (H150i "Color Shift" = 2) hand it contrasting ones
+        n = int(m[1])
+        if "-c" in args:
+            i = args.index("-c") + 1
+            args[i] = ",".join([args[i]] * n)
+        else:
+            args += ["-c", ",".join((RAINBOWISH * n)[:n])]
         out = openrgb(*args)
     if re.search(r"error|wrong|invalid|not found", out, re.I):
         sys.exit(out.strip())

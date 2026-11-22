@@ -1,0 +1,8 @@
+[Unit]
+Description=Apply LED night schedule
+After=openrgb.service
+Requisite=openrgb.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/led tick

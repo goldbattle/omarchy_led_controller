@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenRGB SDK server (LED control backend)
+
+[Service]
+ExecStart=/usr/bin/openrgb --server --noautoconnect
+# Re-apply ~/.config/led.json (colours, per-device switches, night schedule).
+# Wait for the port, then 2s for device detection (~0.8s here; raise if devices get skipped).
+ExecStartPost=/bin/bash -c 'for i in {1..40}; do (: >/dev/tcp/127.0.0.1/6742) 2>/dev/null && sleep 2 && exec %h/.local/bin/led restore; sleep 0.25; done'
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""Tiny front-end over the OpenRGB client (talks to the `openrgb --server` user service).
+
+All state lives in ~/.config/led.json; every command updates it, then sync() makes the
+hardware match, so the panel, right-click, terminal and the night timer all obey the
+same per-device switches. Commands print the resulting state as JSON.
+
+  led state
+  led set [RRGGBB|theme] [-m static|breathing|rainbow|daylight] [-b 0-100]
+  led on | led off
+  led device NAME on|off          per-device power switch
+  led night NAME on|off           does auto-off apply to this device
+  led schedule '{"auto_off": true, "off": "22:00", "on": "09:00",
+                 "daylight": [["08:00", "0040FF"], ["19:00", "FF6000"], ...]}'
+  led restart                     restart the OpenRGB server (re-detects devices, re-applies)
+  led tick                        run every minute by led-schedule.timer
+  led restore                     run at login by openrgb.service
+"""
+import argparse, json, os, re, shlex, subprocess, sys, time
+from pathlib import Path
+
+# Each device names its modes differently; first match wins.
+MODES = {
+    "static":    ["Direct", "Static"],
+    "breathing": ["Breathing", "Color Pulse", "Pulsing"],
+    "rainbow":   ["Spectrum Cycle", "Rainbow Wave", "Rainbow", "Color Shift"],
+    "off":       ["Off"],
+}
+CONFIG = Path.home() / ".config/led.json"
+DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": True,
+            "disabled": [],        # per-device switch off
+            "auto_off": False, "off": "22:00", "on": "09:00",
+            "keep_on": [],         # devices the night schedule leaves alone
+            # daylight mode: colour fades linearly between these, wrapping midnight.
+            # Fixed clock times, not real sunset; nudge them with the seasons.
+            "daylight": [["06:00", "FF0000"], ["08:00", "0040FF"], ["17:00", "0040FF"],
+                         ["19:00", "FF6000"], ["21:00", "FF0000"]]}
+# {"window": last seen in-window bool, "held": schedule is holding lights off}.
+# In /run so a reboot forgets it and the next tick re-evaluates.
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "led-schedule.json"
+THEME = Path.home() / ".local/state/omarchy/current/theme"
+HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+def openrgb(*args):
+    r = subprocess.run(["openrgb", *args], capture_output=True, text=True, timeout=20)
+    return r.stdout + r.stderr  # exit code is 0 even on errors; callers check the text
+
+
+def apply(args):
+    out = openrgb(*args)
+    if (m := re.search(r"between (\d+) and", out)) and "-c" in args:
+        # some modes want N colours (Commander "Color Pulse" = 2): repeat ours
+        i = args.index("-c") + 1
+        args[i] = ",".join([args[i]] * int(m[1]))
+        out = openrgb(*args)
+    if re.search(r"error|wrong|invalid|not found", out, re.I):
+        sys.exit(out.strip())
+
+
+def parse(text):
+    devs = []
+    for line in text.splitlines():
+        if m := re.match(r"^(\d+): (.+)$", line):
+            devs.append({"index": int(m[1]), "name": m[2].strip(), "type": "", "modes": []})
+        elif devs and (m := re.match(r"^\s+(Type|Modes):\s+(.*)$", line)):
+            if m[1] == "Type":
+                devs[-1]["type"] = m[2].strip()
+            else:  # [Active] 'Two Words' Plain  -> brackets mark the active mode
+                devs[-1]["modes"] = shlex.split(m[2].replace("[", "").replace("]", ""))
+    return devs
+
+
+def pick(dev, intent):
+    return next((m for m in MODES[intent] if m in dev["modes"]), None)
+
+
+def build(devs, color, intent, brightness):
+    r, g, b = (round(int(color[i:i + 2], 16) * brightness / 100) for i in (0, 2, 4))
+    hexc = f"{r:02X}{g:02X}{b:02X}"
+    calls = []
+    for d in devs:
+        mode, c = pick(d, intent), hexc
+        if intent == "off" and not mode:  # no hardware Off: paint it black
+            mode, c = pick(d, "static"), "000000"
+        if not mode:
+            continue
+        args = ["-d", str(d["index"]), "-m", mode]
+        if intent != "rainbow" and mode != "Off":
+            args += ["-c", c]
+        calls.append(args)
+    return calls
+
+
+def in_window(now, off, on):
+    """now/off/on are "HH:MM"; the window may wrap past midnight."""
+    if off == on:
+        return False
+    return off <= now < on if off < on else now >= off or now < on
+
+
+def daylight(now, keys):
+    """Colour at "HH:MM" `now`, fading between [["HH:MM", "RRGGBB"], ...] keyframes."""
+    mins = lambda t: int(t[:2]) * 60 + int(t[3:])
+    pts = sorted((mins(t), [int(c[i:i + 2], 16) for i in (0, 2, 4)]) for t, c in keys)
+    n = mins(now)
+    prev = max((p for p in pts if p[0] <= n), default=pts[-1])
+    nxt = min((p for p in pts if p[0] > n), default=pts[0])
+    f = ((n - prev[0]) % 1440) / ((nxt[0] - prev[0]) % 1440 or 1440)
+    return "".join(f"{round(a + (b - a) * f):02X}" for a, b in zip(prev[1], nxt[1]))
+
+
+def theme_color():
+    """Omarchy's per-theme RGB colour (keyboard.rgb), falling back to the theme accent."""
+    for f, pat in (("keyboard.rgb", r"#?([0-9a-fA-F]{6})"), ("colors.toml", r'^accent\s*=\s*"#([0-9a-fA-F]{6})"')):
+        try:
+            if m := re.search(pat, (THEME / f).read_text(), re.M):
+                return m[1].upper()
+        except OSError:
+            pass
+    return "FFFFFF"
+
+
+def look(cfg):
+    """(colour, mode) to show right now."""
+    if cfg["mode"] == "daylight":
+        return daylight(time.strftime("%H:%M"), cfg["daylight"]), "static"
+    return theme_color() if cfg["color"] == "theme" else cfg["color"], cfg["mode"]
+
+
+def lit(cfg, held, devs):
+    """The one rule for which devices should be on."""
+    return [d for d in devs if cfg["power"] and d["name"] not in cfg["disabled"]
+            and not (held and d["name"] not in cfg["keep_on"])]
+
+
+def load(path, default):
+    try:
+        return {**default, **json.loads(path.read_text())}
+    except (FileNotFoundError, ValueError):
+        return dict(default)
+
+
+def save(path, data):
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def sync(cfg, rt, devs):
+    on = lit(cfg, rt["held"], devs)
+    off = [d for d in devs if d not in on]
+    color, mode = look(cfg)
+    for args in build(on, color, mode, cfg["brightness"]) + build(off, "000000", "off", 100):
+        apply(args)
+    rt["shown"] = color
+
+
+def toggle(lst, name, include):
+    return sorted(set(lst) | {name}) if include else [n for n in lst if n != name]
+
+
+def main():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    for name in ("state", "on", "off", "tick", "restore", "restart"):
+        sub.add_parser(name)
+    s = sub.add_parser("set")
+    s.add_argument("color", nargs="?", type=lambda c: "theme" if c == "theme" else re.fullmatch(r"#?([0-9a-fA-F]{6})", c)[1].upper())
+    s.add_argument("-m", "--mode", choices=["static", "breathing", "rainbow", "daylight"])
+    s.add_argument("-b", "--brightness", type=int, choices=range(0, 101), metavar="0-100")
+    for name in ("device", "night"):
+        d = sub.add_parser(name)
+        d.add_argument("name")
+        d.add_argument("state", choices=["on", "off"])
+    sub.add_parser("schedule").add_argument("json")
+    a = p.parse_args()
+
+    if a.cmd == "restart":  # its ExecStartPost runs `led restore`, so just report afterwards
+        r = subprocess.run(["systemctl", "--user", "restart", "openrgb.service"], capture_output=True, text=True)
+        if r.returncode:
+            sys.exit(r.stderr.strip())
+        a.cmd = "state"
+
+    cfg, rt = load(CONFIG, DEFAULTS), load(RUNTIME, {"window": None, "held": False})
+    devs = parse(openrgb("-ld"))
+    names = {d["name"] for d in devs}
+    if getattr(a, "name", None) and a.name not in names:
+        sys.exit(f"unknown device {a.name!r}; have: {sorted(names)}")
+
+    if a.cmd == "set":
+        cfg.update(color=a.color or cfg["color"], mode=a.mode or cfg["mode"], power=True)
+        cfg["brightness"] = cfg["brightness"] if a.brightness is None else a.brightness
+        rt["held"] = False  # touching the lights at night overrides the schedule until morning
+    elif a.cmd in ("on", "off"):
+        cfg["power"] = a.cmd == "on"
+        rt["held"] = rt["held"] and a.cmd == "off"
+    elif a.cmd == "device":
+        cfg["disabled"] = toggle(cfg["disabled"], a.name, a.state == "off")
+    elif a.cmd == "night":
+        cfg["keep_on"] = toggle(cfg["keep_on"], a.name, a.state == "off")
+    elif a.cmd == "schedule":
+        try:
+            new = json.loads(a.json)
+            keys = new.get("daylight", cfg["daylight"])
+            ok = (isinstance(new, dict) and isinstance(new.get("auto_off", cfg["auto_off"]), bool)
+                  and all(HHMM.fullmatch(str(new.get(k, cfg[k]))) for k in ("off", "on"))
+                  and isinstance(keys, list) and keys and all(
+                      isinstance(k, list) and len(k) == 2 and HHMM.fullmatch(str(k[0]))
+                      and re.fullmatch(r"[0-9A-Fa-f]{6}", str(k[1])) for k in keys))
+        except (ValueError, AttributeError):
+            ok = False
+        if not ok:
+            sys.exit('expected {"auto_off": bool, "off": "HH:MM", "on": "HH:MM", '
+                     '"daylight": [["HH:MM", "RRGGBB"], ...]} (all keys optional)')
+        cfg.update({k: new[k] for k in ("auto_off", "off", "on", "daylight") if k in new})
+
+    if a.cmd in ("tick", "schedule", "restore"):
+        window = cfg["auto_off"] and in_window(time.strftime("%H:%M"), cfg["off"], cfg["on"])
+        changed = window != rt["window"]  # act on transitions only, so manual changes stick
+        if changed or a.cmd == "restore":
+            rt.update(window=window, held=window)
+        drifted = look(cfg)[0] != rt.get("shown")  # daylight fade step or theme change
+        if a.cmd == "tick" and not changed and not drifted:
+            return
+
+    if a.cmd != "state":
+        save(CONFIG, cfg)
+        sync(cfg, rt, devs)
+        save(RUNTIME, rt)  # after sync: a failed apply is retried next tick
+    if a.cmd != "tick":
+        print(json.dumps({**cfg, "held": rt["held"], "shown": look(cfg)[0], "devices": devs}))
+
+
+if __name__ == "__main__":
+    main()

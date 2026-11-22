@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "com.pgeneva.omarchy_led_controller",
+  "name": "LEDs",
+  "version": "0.1.0",
+  "author": "pgeneva",
+  "license": "MIT",
+  "description": "Control case, cooler, GPU and motherboard RGB through the OpenRGB server.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "LEDs",
+    "description": "Pick a colour, effect and brightness for every OpenRGB device. Right-click toggles off.",
+    "category": "System",
+    "aliases": ["rgb", "led", "openrgb"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

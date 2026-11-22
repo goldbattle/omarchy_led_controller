@@ -19,8 +19,13 @@ panel_monitor() {
     | select(any(.value.levels[][]; .namespace == "omarchy-keyboard-panel")) | .key'
 }
 
-omarchy-shell "$id" open && sleep 1
-mon=$(panel_monitor)
+# Retried for a few seconds: right after ./install.sh the shell may still be restarting.
+mon=""
+for _ in {1..10}; do
+  omarchy-shell "$id" open >/dev/null 2>&1 && sleep 1 && mon=$(panel_monitor)
+  [[ -n $mon ]] && break
+  sleep 1
+done
 omarchy-shell "$id" close
 [[ -n $mon ]] || { echo "panel didn't open: is $id enabled?" >&2; exit 1; }
 

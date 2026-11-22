@@ -293,8 +293,11 @@ def theme_color() -> str:
     except (OSError, ValueError):
         tint = None
     if tint and tint != palette.get("background") and max(rgb) >= 128:
-        return tint
-    return palette.get("accent", "FFFFFF")
+        return tint  # hand-picked, so kept even when pale (rose-pine's lavender)
+    accent = palette.get("accent", "FFFFFF")
+    # A colourless accent (the greys of white, vantablack, solitude) is a dim, dirty white on
+    # LEDs: use clean white instead.
+    return "FFFFFF" if colorsys.rgb_to_hsv(*(int(accent[i:i + 2], 16) / 255 for i in (0, 2, 4)))[1] < 0.15 else accent
 
 
 def color_name(color: str) -> str:

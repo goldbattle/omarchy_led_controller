@@ -117,6 +117,9 @@ with tempfile.TemporaryDirectory() as d:
     assert led.theme_color() == "56949F"
     (led.THEME / "chromium.theme").write_text("garbage\n")
     assert led.theme_color() == "56949F"
+    (led.THEME / "chromium.theme").unlink()
+    (led.THEME / "colors.toml").write_text('accent = "#6e6e6e"\nbackground = "#ffffff"\n')  # "white" theme
+    assert led.theme_color() == "FFFFFF"                  # grey accent -> clean white
     # palette slots: "theme:magenta" follows that slot; a missing slot falls back to "theme"
     (led.THEME / "colors.toml").write_text('accent = "#56949f"\nmagenta = "#907aa9"\nbackground = "#faf4ed"\n')
     assert led.theme_palette()["magenta"] == "907AA9"

@@ -8,8 +8,8 @@ change them from the panel, the terminal or a schedule.
 
 ## Features
 
-- Colour presets, plus a row with the current Omarchy theme's own colours that follows you
-  when you switch themes
+- Your Omarchy theme's own colours (they follow you when you switch themes), plus basic
+  colours
 - Static, Breathe, Rainbow and **Flux**: white by day, warm at sunset, red at night
 - Brightness, plus an on/off switch for each device
 - Right-click the bulb to turn everything off or back on

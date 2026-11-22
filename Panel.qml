@@ -17,8 +17,8 @@
 // Layout of the popup, top to bottom
 // ----------------------------------
 //   1. Header       big bulb icon plus a one-line status ("5 devices · static")
-//   2. Colour       a row of fixed colours, then a row with the current theme's
-//                   colours (the first one, with the Omarchy logo, is "theme")
+//   2. Colour       the current theme's colours (the first, with the Omarchy logo,
+//                   is "theme"), then a row of basic colours that never change
 //   3. Effect       Static / Breathe / Rainbow / Flux
 //   4. Brightness   a slider
 //   5. Devices      one on/off switch per detected device
@@ -104,7 +104,7 @@ Panel {
   // A valid 24-hour time such as "07:30" or "22:00".
   readonly property string timeRe: "^([01]\\d|2[0-3]):[0-5]\\d$"
 
-  // The fixed colour presets (the theme's colours get a row of their own).
+  // The basic colours row (the theme's colours come first, in a row of their own).
   readonly property var swatches: ["FFFFFF", "FF0000", "FF6000", "FFC000", "00FF00",
                                    "00FFFF", "0000FF", "8000FF", "FF00A0"]
 
@@ -289,24 +289,13 @@ Panel {
           }
         }
 
-        // --- 2. Colour: fixed presets, then the current theme's colours --------
-        PanelSectionHeader { text: "Colour"; foreground: root.foreground; fontFamily: root.fontFamily }
-
-        Flow {
-          width: parent.width
-          spacing: Style.space(8)
-          Repeater {
-            model: root.swatches
-            Swatch { required property string modelData; value: modelData; hex: modelData }
-          }
-        }
-
-        // First "theme" itself (what `led` picks for this theme, marked with the
-        // Omarchy logo), then each palette slot whose colour isn't already shown.
-        // A slot follows itself through theme changes: "magenta" is rose-pine's
-        // purple now and tokyo-night's magenta after a switch.
+        // --- 2. Colour: the current theme's colours, then basic colours -------
+        // First "theme" itself (what `led` recommends for this theme, marked with
+        // the Omarchy logo), then each palette slot whose colour isn't already
+        // shown. A slot follows itself through theme changes: "magenta" is
+        // rose-pine's purple now and tokyo-night's magenta after a switch.
         PanelSectionHeader {
-          text: "Theme colours" + (root.st.theme ? " · " + root.st.theme : "")
+          text: "Colour" + (root.st.theme ? " · " + root.st.theme : "")
           foreground: root.foreground
           fontFamily: root.fontFamily
         }
@@ -330,6 +319,18 @@ Panel {
                                          : (root.st.palette || {})[modelData.slice(6)] || "FFFFFF"
               logo: modelData === "theme"
             }
+          }
+        }
+
+        // Pure colours that don't change with the theme; they look the most vivid on LEDs.
+        PanelSectionHeader { text: "Basic colours"; foreground: root.foreground; fontFamily: root.fontFamily }
+
+        Flow {
+          width: parent.width
+          spacing: Style.space(8)
+          Repeater {
+            model: root.swatches
+            Swatch { required property string modelData; value: modelData; hex: modelData }
           }
         }
 

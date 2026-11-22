@@ -75,7 +75,8 @@ Panel {
   // `led` also sends a few extras that are read below when present:
   //   shown (the colour actually on the LEDs right now), flux (the current Flux
   //   step, e.g. "3400K"), theme (the Omarchy theme's name, e.g. "tokyo-night"),
-  //   gamma, idle_off and location.
+  //   color_name (a rough name for the colour, e.g. "purple"), gamma, idle_off
+  //   and location.
   property var st: ({ color: "8000FF", mode: "static", brightness: 100, power: true, held: false,
                       disabled: [], auto_off: false, off: "22:00", on: "09:00", devices: [] })
 
@@ -115,8 +116,30 @@ Panel {
   // ---------------------------------------------------------------------------
 
   // Queue a `led` command. Commands run one at a time, in the order they were
-  // clicked, so quick clicks are never lost or run out of order.
-  function run(args) { queue = queue.concat([args]); next() }
+  // clicked. Each takes a moment (it changes every device, then checks they all
+  // took it), so clicking quickly through colours would leave the lights
+  // trailing behind. Instead a new command replaces any still-waiting command it
+  // makes pointless, and the lights jump straight to the last thing clicked.
+  function run(args) {
+    queue = queue.filter(function(waiting) { return !supersedes(args, waiting) }).concat([args])
+    next()
+  }
+
+  // Whether running `newer` makes the waiting command `older` pointless: a
+  // colour replaces a colour, an effect an effect, brightness brightness and
+  // colour depth colour depth (same shape of `led set`); a device switch
+  // replaces the same device's switch; all on/off replaces all on/off.
+  // Schedule changes are never dropped: each one may change a different field.
+  function supersedes(newer, older) {
+    function shape(args) {  // ["set", "-m", "rainbow"] -> "set -m _"
+      return args.map(function(a, i) { return i === 0 || a[0] === "-" ? a : "_" }).join(" ")
+    }
+    var onOff = ["on", "off"]
+    if (onOff.indexOf(newer[0]) !== -1) return onOff.indexOf(older[0]) !== -1
+    if (newer[0] === "set") return shape(newer) === shape(older)
+    if (newer[0] === "device") return older[0] === "device" && newer[1] === older[1]
+    return false
+  }
 
   // Start the next queued command, unless one is already running.
   function next() {
@@ -126,25 +149,24 @@ Panel {
     proc.running = true
   }
 
-  // Change colour, effect and brightness together.
-  function setLook(color, mode, brightness) { run(["set", color, "-m", mode, "-b", String(brightness)]) }
+  // Change one thing at a time; `led` keeps everything else as it is. (Sending
+  // only what changed matters: values read from `st` may be a click behind.)
+  // Picking a colour while in Flux switches to Static; `led` handles that.
+  function setColor(color) { run(["set", color]) }
+  function setMode(mode) { run(["set", "-m", mode]) }
+  function setBrightness(percent) { run(["set", "-b", String(percent)]) }
 
   // What the lights are showing, for the header: "static · tokyo-night",
-  // "breathing · #8000FF", "flux · 3400K", or just "rainbow" (it has no colour).
+  // "breathing · purple", "flux · 3400K", or just "rainbow" (it has no colour).
   function lookText() {
     if (st.mode === "flux") return "flux" + (st.flux ? " · " + st.flux : "")
     if (st.mode === "rainbow") return "rainbow"
     if (st.color === "theme") return st.mode + " · " + (st.theme || "theme")
-    return st.mode + " · #" + st.color
+    return st.mode + (st.color_name ? " · " + st.color_name : "")
   }
 
   // Change one or more schedule settings, e.g. setSchedule({ off: "23:00" }).
   function setSchedule(patch) { run(["schedule", JSON.stringify(patch)]) }
-
-  // Which effect to use when a colour is picked. Flux picks its own colour from
-  // the sun, so choosing a colour while in Flux means "use this colour instead"
-  // and switches to Static. Any other effect is kept.
-  function colorMode() { return st.mode === "flux" ? "static" : st.mode }
 
   // Fetch the state once at startup, so right-click works before the panel has
   // ever been opened, and again every time the panel opens.
@@ -255,7 +277,7 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.setLook(parent.modelData, root.colorMode(), root.st.brightness)
+                onClicked: root.setColor(parent.modelData)
               }
               // The "theme" swatch carries the Omarchy logo (the same glyph as the
               // bar's menu button) so it reads as "follow the theme" rather than
@@ -287,7 +309,7 @@ Panel {
           focusable: false
           foreground: root.foreground
           fontFamily: root.fontFamily
-          onChanged: function(v) { root.setLook(root.st.color, v, root.st.brightness) }
+          onChanged: function(v) { root.setMode(v) }
         }
 
         // --- 4. Brightness ------------------------------------------------------
@@ -299,7 +321,7 @@ Panel {
           minimum: 5; maximum: 100; step: 5; integer: true
           value: root.st.brightness
           onMoved: function(v) { root.liveBrightness = Math.round(v) }
-          onReleased: function(v) { root.setLook(root.st.color, root.st.mode, Math.round(v)) }
+          onReleased: function(v) { root.setBrightness(Math.round(v)) }
         }
 
         // --- 5. One switch per device ----------------------------------------
@@ -362,7 +384,7 @@ Panel {
             foreground: root.foreground
             onAccepted: {
               var m = String(text).match(/^#?([0-9a-fA-F]{6})$/)
-              if (m) root.setLook(m[1].toUpperCase(), root.colorMode(), root.st.brightness)
+              if (m) root.setColor(m[1].toUpperCase())
             }
           }
 

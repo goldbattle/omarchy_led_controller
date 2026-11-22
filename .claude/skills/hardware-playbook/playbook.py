@@ -38,6 +38,32 @@ def run(*args: str) -> State:
     return json.loads(r.stdout) if r.stdout.strip() else run("state")
 
 
+def expect(state: State, **fields: Any) -> State:
+    """Fail the step unless `led` reports these values (for things modes can't show)."""
+    wrong = {k: state.get(k) for k, v in fields.items() if state.get(k) != v}
+    if wrong:
+        raise RuntimeError(f"led reports {wrong}, expected {fields}")
+    return state
+
+
+def rapid(*commands: tuple[str, ...]) -> State:
+    """Like clicking fast: each command right after the previous, no pause."""
+    for c in commands:
+        state = run(*c)
+    return state
+
+
+def overlapping(*commands: tuple[str, ...]) -> State:
+    """Several led runs at once, like the timer or `led watch` firing mid-click. They must
+    take turns (led's lock), leaving the hardware matching whatever state ends up saved."""
+    procs = [subprocess.Popen(["led", *c], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+             for c in commands]
+    errors = [err.strip() for p in procs if (err := p.communicate(timeout=120)[1]) and p.returncode]
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    return run("state")
+
+
 def expected(dev: State, state: State) -> str | None:
     """The mode `led` should have put this device in, given the state it reported."""
     lit = state["power"] and not state["held"] and dev["name"] not in state["disabled"]
@@ -79,6 +105,8 @@ def steps(devices: list[str]) -> list[tuple[str, Callable[[], State]]]:
         ("breathing -> rainbow -> breathing", lambda: (run("set", "-m", "rainbow"), run("set", "-m", "breathing"))[1]),
         ("theme colour", lambda: run("set", "theme", "-m", "static")),
         ("flux", lambda: run("set", "-m", "flux")),
+        ("colour picked in flux switches to static",
+         lambda: (run("set", "-m", "flux"), expect(run("set", "00FF00"), mode="static", color="00FF00"))[1]),
         ("dim white, 30%", lambda: run("set", "FFFFFF", "-m", "static", "-b", "30")),
         ("colour depth 1.0", lambda: run("set", "-g", "1.0", "-b", "100")),
     ]
@@ -92,6 +120,13 @@ def steps(devices: list[str]) -> list[tuple[str, Callable[[], State]]]:
         ("night schedule starts", lambda: run("schedule", json.dumps({"auto_off": True, "off": hhmm(-1), "on": hhmm(60)}))),
         ("night schedule turned off", lambda: run("schedule", json.dumps({"auto_off": False}))),
         ("all off while breathing, then on", lambda: (run("set", "-m", "breathing"), run("off"), run("on"))[2]),
+        ("rapid clicks: colours and effects, last one wins",
+         lambda: expect(rapid(("set", "FF0000"), ("set", "-m", "rainbow"), ("set", "0000FF"), ("set", "-m", "breathing"),
+                              ("set", "-m", "static"), ("set", "-m", "rainbow"), ("set", "8000FF"), ("set", "-m", "static")),
+                        mode="static", color="8000FF")),
+        ("overlapping runs: clicks plus timer at once",
+         lambda: overlapping(("set", "-m", "rainbow"), ("tick",), ("set", "FF6000"), ("set", "-m", "static"),
+                             ("tick",), ("set", "-m", "breathing"))),
     ]
     return s
 

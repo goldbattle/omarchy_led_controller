@@ -124,6 +124,17 @@ assert sent == [(led.adjust("F38D70", 50, 2.8), "static")] and len(applied) == 1
 sent.clear()
 led.sync(dict(cfg2, disabled=[board["name"]]), {"held": False}, devs[:1] + [board])
 assert sent == [("000000", "off")]                      # switched off -> board dark
+# rate limit: a change waits until MIN_GAP after the previous one finished, and stamps its own
+naps: list[float] = []
+real_sleep, real_now = led.time.sleep, led.time.time
+led.time.sleep, led.time.time = naps.append, lambda: 1000.0
+rt3: dict[str, Any] = {"held": False, "synced": 999.7}
+led.sync(cfg2, rt3, devs[:1])
+assert len(naps) == 1 and abs(naps[0] - 0.7) < 1e-9 and rt3["synced"] == 1000.0
+naps.clear()
+led.sync(cfg2, {"held": False, "synced": 990.0}, devs[:1])  # long ago: no wait
+assert naps == []
+led.time.sleep, led.time.time = real_sleep, real_now
 led.apply, led.stuck = real_apply, real_stuck
 
 # screens_off: dark only when every enabled monitor is DPMS-off; unknown -> never dark
@@ -156,4 +167,26 @@ assert calls[1][-1] == "FF0000,FF0000"
 calls.clear()  # rainbow fallback without a colour (H150i "Color Shift" wants 2)
 led.apply(["-d", "3", "-m", "Color Shift"])
 assert calls[1][-2:] == ["-c", "FF0000,0000FF"]
+# colour names for the panel header: every preset swatch, plus custom colours
+names_of = {"FFFFFF": "white", "FF0000": "red", "FF6000": "orange", "FFC000": "yellow", "00FF00": "green",
+            "00FFFF": "cyan", "0000FF": "blue", "8000FF": "purple", "FF00A0": "pink"}
+for hexc, name in names_of.items():
+    assert led.color_name(hexc) == name, (hexc, led.color_name(hexc))
+assert led.color_name("F38D70") == "pale red" and led.color_name("000000") == "black"
+assert led.color_name("808080") == "grey" and led.color_name("FF2A00") == "red"
+
+# lock: a second led waits until the first one is done
+import fcntl, tempfile as tf
+with tf.TemporaryDirectory() as d:
+    led.LOCK = pathlib.Path(d) / "led.lock"
+    held = led.lock()
+    probe = open(led.LOCK, "w")
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        raise AssertionError("lock was not held")
+    except BlockingIOError:
+        pass
+    held.close()
+    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)  # free again once released
+    probe.close()
 print("ok")

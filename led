@@ -15,11 +15,11 @@ same per-device switches. Commands print the resulting state as JSON.
   led watch                       run by led-idle.service: dark while all monitors are off
   led restore                     run at login by openrgb.service
 """
-import argparse, json, math, os, re, shlex, subprocess, sys, time
+import argparse, colorsys, fcntl, json, math, os, re, shlex, subprocess, sys, time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, NoReturn, NotRequired, TypedDict, TypeVar, cast
+from typing import IO, Any, NoReturn, NotRequired, TypedDict, TypeVar, cast
 
 
 class Config(TypedDict):
@@ -43,6 +43,7 @@ class Runtime(TypedDict):
     held: bool           # the schedule is holding the lights off
     idle: bool           # all monitors are off (set by `led watch`)
     shown: NotRequired[str]  # colour last sent to the hardware
+    synced: NotRequired[float]  # time.time() when the last change to the hardware finished
 
 
 class Device(TypedDict):
@@ -79,6 +80,12 @@ DARKROOM = -12
 #  "idle": monitors are off (set by `led watch`)}.
 # In /run so a reboot forgets it and the next tick re-evaluates.
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "led-schedule.json"
+# Least time between two changes to the hardware. OpenRGB 1.1 drops mode changes that come
+# too soon after the previous one: measured on a Commander PRO, 0.3s between changes still
+# loses them every time, 1s never does. Calibration knob: raise it if a device still drops.
+MIN_GAP = 1.0
+# Held by every led that changes something, so they take turns (see lock()).
+LOCK = RUNTIME.with_name("led.lock")
 RT_DEFAULT: Runtime = {"window": None, "held": False, "idle": False}
 THEME = Path.home() / ".local/state/omarchy/current/theme"
 # Optional motherboard (ASUS Aura) backend from extras/asus-aura/. Skipped when not installed.
@@ -225,6 +232,20 @@ def theme_color() -> str:
     return "FFFFFF"
 
 
+def color_name(color: str) -> str:
+    """A rough everyday name for an RRGGBB colour, e.g. "purple" or "pale red", for the panel."""
+    h, s, v = colorsys.rgb_to_hsv(*(int(color[i:i + 2], 16) / 255 for i in (0, 2, 4)))
+    if v < 0.15:
+        return "black"
+    if s < 0.15:
+        return "white" if v > 0.8 else "grey"
+    hue = h * 360
+    name = next(n for limit, n in ((15, "red"), (40, "orange"), (70, "yellow"), (160, "green"),
+                                   (200, "cyan"), (250, "blue"), (290, "purple"), (345, "pink"),
+                                   (360, "red")) if hue < limit)
+    return name if s >= 0.6 else f"pale {name}"
+
+
 def theme_name() -> str:
     """The current Omarchy theme's name, e.g. "tokyo-night" ("" if unknown)."""
     try:
@@ -257,18 +278,28 @@ def screens_off() -> bool:
     return bool(mons) and not any(m.get("dpmsStatus", True) for m in mons)
 
 
+def lock() -> IO[str]:
+    """Wait until no other led is changing anything, then hold the lock until the returned file
+    is closed (or this process exits). The panel, the minute timer and `led watch` all
+    read-modify-write the same files, and OpenRGB drops mode changes that overlap."""
+    f = open(LOCK, "w")
+    fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+
+
 def watch() -> NoReturn:
     # ponytail: polls every 2s (hyprctl ~7ms); Hyprland has no DPMS event on socket2 to subscribe to.
     while True:
         off = screens_off()
-        rt = load(RUNTIME, RT_DEFAULT)
-        if off != bool(rt.get("idle")):
-            rt["idle"] = off
-            try:
-                sync(load(CONFIG, DEFAULTS), rt, devices())
-                save(RUNTIME, rt)
-            except SystemExit as e:  # openrgb hiccup: log and retry next poll
-                print(f"led watch: {e}", file=sys.stderr, flush=True)
+        with lock():
+            rt = load(RUNTIME, RT_DEFAULT)
+            if off != bool(rt.get("idle")):
+                rt["idle"] = off
+                try:
+                    sync(load(CONFIG, DEFAULTS), rt, devices())
+                    save(RUNTIME, rt)
+                except SystemExit as e:  # openrgb hiccup: log and retry next poll
+                    print(f"led watch: {e}", file=sys.stderr, flush=True)
         time.sleep(2)
 
 
@@ -339,6 +370,8 @@ def sync(cfg: Config, rt: Runtime, devs: list[Device]) -> None:
     off = [d for d in devs if d not in on]
     color, mode = look(cfg)
     calls = build(on, color, mode, cfg["brightness"], cfg["gamma"]) + build(off, "000000", "off", 100)
+    if (wait := rt.get("synced", 0) + MIN_GAP - time.time()) > 0:  # see MIN_GAP
+        time.sleep(wait)
     for args in calls:
         apply(args)
     for args in stuck(calls):  # ponytail: one retry; loop if a device ever needs more
@@ -348,7 +381,7 @@ def sync(cfg: Config, rt: Runtime, devs: list[Device]) -> None:
             aura_set(adjust(color, cfg["brightness"], cfg["gamma"]), mode)
         elif d.get("backend") == "aura":
             aura_set("000000", "off")
-    rt["shown"] = color
+    rt["shown"], rt["synced"] = color, time.time()
 
 
 def toggle(lst: list[str], name: str, include: bool) -> list[str]:
@@ -400,6 +433,9 @@ def main() -> None:
 
     if a.cmd == "watch":
         watch()
+    # Every command that changes something takes turns. Not `state` (read-only, keeps the panel
+    # snappy) and not `restart`: openrgb.service runs `led restore` while restart waits on it.
+    held = lock() if a.cmd not in ("state", "restart") else None  # released when led exits
     cfg = cast(Config, {k: v for k, v in load(CONFIG, DEFAULTS).items() if k in DEFAULTS})
     if cfg["mode"] == "daylight":  # renamed
         cfg["mode"] = "flux"
@@ -410,7 +446,9 @@ def main() -> None:
         sys.exit(f"unknown device {a.name!r}; have: {sorted(names)}")
 
     if a.cmd == "set":
-        cfg["color"], cfg["mode"], cfg["power"] = a.color or cfg["color"], a.mode or cfg["mode"], True
+        # A colour picked while in flux means "this colour instead": flux would ignore it.
+        keep = "static" if a.color and cfg["mode"] == "flux" else cfg["mode"]
+        cfg["color"], cfg["mode"], cfg["power"] = a.color or cfg["color"], a.mode or keep, True
         cfg["brightness"] = cfg["brightness"] if a.brightness is None else a.brightness
         if a.gamma is not None:
             if not 1.0 <= a.gamma <= 4.0:
@@ -458,7 +496,8 @@ def main() -> None:
         save(RUNTIME, rt)  # after sync: a failed apply is retried next tick
     if a.cmd != "tick":
         print(json.dumps({**cfg, "held": rt["held"], "shown": look(cfg)[0], "flux": flux_now(cfg)[1],
-                          "theme": theme_name(), "devices": devs}))
+                          "theme": theme_name(), "color_name": color_name(look(cfg)[0]),
+                          "devices": devs}))
 
 
 if __name__ == "__main__":

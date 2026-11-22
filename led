@@ -43,6 +43,9 @@ DARKROOM = -12
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "led-schedule.json"
 RT_DEFAULT = {"window": None, "held": False, "idle": False}
 THEME = Path.home() / ".local/state/omarchy/current/theme"
+# Motherboard (ASUS Aura) backend: a root helper next to OpenRGB, installed by install-aura.sh.
+AURA = "/usr/local/libexec/led-aura"
+AURA_CACHE = RUNTIME.with_name("led-aura.json")  # probe result, once per boot
 HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 
@@ -87,13 +90,20 @@ def pick(dev, intent):
     return next((m for m in MODES[intent] if m in dev["modes"]), None)
 
 
-def build(devs, color, intent, brightness, gamma=1.0):
+def adjust(color, brightness, gamma=1.0):
     # Hex colours are screen (gamma-encoded) values but LED PWM is linear: without this, pastels
     # like a theme accent wash out to near-white. Pure colours (FF0000, ...) are unaffected.
-    r, g, b = (round((int(color[i:i + 2], 16) / 255) ** gamma * 255 * brightness / 100) for i in (0, 2, 4))
-    hexc = f"{r:02X}{g:02X}{b:02X}"
+    return "".join(f"{round((int(color[i:i + 2], 16) / 255) ** gamma * 255 * brightness / 100):02X}"
+                   for i in (0, 2, 4))
+
+
+def build(devs, color, intent, brightness, gamma=1.0):
+    """OpenRGB CLI calls for `devs` (motherboard/aura devices are handled by sync)."""
+    hexc = adjust(color, brightness, gamma)
     calls = []
     for d in devs:
+        if d.get("backend") == "aura":
+            continue
         mode, c = pick(d, intent), hexc
         if intent == "off" and not mode:  # no hardware Off: paint it black
             mode, c = pick(d, "static"), "000000"
@@ -202,7 +212,7 @@ def watch():
         if off != bool(rt.get("idle")):
             rt["idle"] = off
             try:
-                sync(load(CONFIG, DEFAULTS), rt, parse(openrgb("-ld")))
+                sync(load(CONFIG, DEFAULTS), rt, devices())
                 save(RUNTIME, rt)
             except SystemExit as e:  # openrgb hiccup: log and retry next poll
                 print(f"led watch: {e}", file=sys.stderr, flush=True)
@@ -220,12 +230,49 @@ def save(path, data):
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
+def aura_device():
+    """The motherboard through led-aura, if installed and present. Probed once per boot."""
+    try:
+        info = json.loads(AURA_CACHE.read_text())
+    except (OSError, ValueError):
+        if not os.path.exists(AURA):
+            return None
+        r = subprocess.run(["sudo", "-n", AURA, "probe"], capture_output=True, text=True, timeout=20)
+        try:
+            info = json.loads(r.stdout)
+        except ValueError:
+            return None  # no sudo rule yet / helper error: retry next time, don't cache
+        AURA_CACHE.write_text(r.stdout)
+    if not info.get("found"):
+        return None
+    try:
+        board = Path("/sys/class/dmi/id/board_name").read_text().strip()
+    except OSError:
+        board = "motherboard"
+    return {"index": None, "name": f"ASUS {board}", "type": "Motherboard", "backend": "aura",
+            "modes": ["Off", "Static", "Breathing", "Spectrum Cycle"]}
+
+
+def aura_set(color, mode):
+    r = subprocess.run(["sudo", "-n", AURA, "set", color, mode], capture_output=True, text=True, timeout=20)
+    if r.returncode:
+        sys.exit(f"led-aura: {(r.stderr or r.stdout).strip()}")
+
+
+def devices():
+    devs = parse(openrgb("-ld"))
+    return devs + [a] if (a := aura_device()) else devs
+
+
 def sync(cfg, rt, devs):
     on = lit(cfg, rt, devs)
     off = [d for d in devs if d not in on]
     color, mode = look(cfg)
     for args in build(on, color, mode, cfg["brightness"], cfg["gamma"]) + build(off, "000000", "off", 100):
         apply(args)
+    for d in devs:
+        if d.get("backend") == "aura":
+            aura_set(adjust(color, cfg["brightness"], cfg["gamma"]), mode) if d in on else aura_set("000000", "off")
     rt["shown"] = color
 
 
@@ -261,7 +308,7 @@ def main():
     if cfg["mode"] == "daylight":  # renamed
         cfg["mode"] = "flux"
     rt = load(RUNTIME, RT_DEFAULT)
-    devs = parse(openrgb("-ld"))
+    devs = devices()
     names = {d["name"] for d in devs}
     if getattr(a, "name", None) and a.name not in names:
         sys.exit(f"unknown device {a.name!r}; have: {sorted(names)}")

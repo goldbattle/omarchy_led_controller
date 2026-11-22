@@ -53,7 +53,19 @@ restarts the shell when `Panel.qml`/`manifest.json` changed (`led`-only changes 
 | Corsair Commander PRO (1b1c:0c10) | USB HID | works; LED strips, both headers sized to **32** LEDs (it can't sense what's attached). At 204 Direct/Static still worked but every hardware effect (Breathe/Rainbow) rendered dark. If the last LEDs stay dark raise it (strips are 10 LEDs each): `openrgb -d "Corsair Commander Pro" -z 0 -sz N -z 1 -sz N && led restart` (without the restart the server ignores later mode changes on it) |
 | Corsair H150i Platinum (1b1c:0c12) | USB HID | works (OpenRGB calls it "H150i PRO RGB") |
 | Logitech G502 Proteus Spectrum | USB HID | works |
-| ASUS PRIME X299-A Aura | SMBus i801 (i2c-5) | **not detected**: nothing at 0x40/0x4E; 0x4F answers but isn't ENE. Check BIOS onboard-LED setting / Aura firmware before any manual probing (SMBus probing can brick RAM SPD). |
+| ASUS PRIME X299-A Aura (ENE `AUMA0-E6K5-0104`, 7 LEDs) | Nuvoton NCT6796D Super I/O SMBus (base 0x2c0), addr 0x4E | works via `led-aura` (not OpenRGB: Linux has no driver for that SMBus) |
+
+## Motherboard backend (`led-aura`)
+OpenRGB only finds Aura on the chipset SMBus; on this board it sits behind the Super I/O's own
+SMBus, which needs the out-of-tree `i2c-nct6775` kernel module. Instead `led-aura` is a
+stdlib-Python port of that driver (via `/dev/port`) plus OpenRGB's ENE register protocol and
+detection test, so nothing needs rebuilding on kernel updates. It only touches RAM registers
+(never the controller's flash), so a power cycle restores BIOS lighting. Raw port I/O needs root:
+```
+sudo ./install-aura.sh   # once, and again when led-aura changes (install.sh reminds you)
+```
+installs it root-owned at `/usr/local/libexec/led-aura` with a sudo rule for just that helper.
+`led` then shows the board as a fifth device (probe cached per boot in `/run/user/$UID`).
 
 ## One-time system setup (not in install.sh, needs root)
 ```

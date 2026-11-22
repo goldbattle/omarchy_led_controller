@@ -79,6 +79,20 @@ with tempfile.TemporaryDirectory() as d:
     (led.THEME / "keyboard.rgb").write_text("#ff00ff\n")  # tokyo-night style override: ignored
     assert led.look(dict(led.DEFAULTS, color="theme")) == ("F38D70", "static")
 
+# motherboard (aura) devices: skipped by the OpenRGB builder, driven through led-aura by sync
+board = {"index": None, "name": "ASUS PRIME X299-A", "type": "Motherboard", "backend": "aura", "modes": []}
+assert led.build(devs[:1] + [board], "FF0000", "static", 100) == [["-d", "0", "-m", "Direct", "-c", "FF0000"]]
+sent, applied = [], []
+led.aura_set, real_apply = (lambda c, m: sent.append((c, m))), led.apply
+led.apply = lambda args: applied.append(args)
+cfg2 = dict(led.DEFAULTS, color="F38D70", brightness=50, gamma=2.8)
+led.sync(cfg2, {"held": False}, devs[:1] + [board])
+assert sent == [(led.adjust("F38D70", 50, 2.8), "static")] and len(applied) == 1
+sent.clear()
+led.sync(dict(cfg2, disabled=[board["name"]]), {"held": False}, devs[:1] + [board])
+assert sent == [("000000", "off")]                      # switched off -> board dark
+led.apply = real_apply
+
 # screens_off: dark only when every enabled monitor is DPMS-off; unknown -> never dark
 import subprocess as sp
 def fake_hyprctl(mons):

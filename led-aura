@@ -1,0 +1,175 @@
+#!/usr/bin/python3 -I
+"""Root helper: ASUS Aura (ENE) motherboard LEDs behind the Nuvoton NCT679x Super I/O SMBus.
+
+A user-space port of two GPL-2.0 pieces, trimmed to what this board needs:
+  - the i2c-nct6775 SMBus master driver (Adam Honse), driven through /dev/port
+  - OpenRGB's ENESMBusController register protocol and detection test
+No kernel module, so nothing to rebuild when the kernel updates. Raw port I/O needs root;
+`led` calls this through a sudo rule (see install-aura.sh). Never writes the controller's
+flash (no ENE "save"), so a power cycle always returns the board to its BIOS lighting.
+
+  led-aura probe                                     JSON: {"found": bool, ...}
+  led-aura set RRGGBB static|breathing|rainbow|off   apply to every motherboard LED
+"""
+import fcntl, json, os, re, sys, time
+
+SIO = 0x2E                       # Super I/O config index port (data port = SIO + 1)
+NCT_IDS = {0xC800: "NCT6791D", 0xC910: "NCT6792D", 0xD120: "NCT6793D",
+           0xD350: "NCT6795D", 0xD420: "NCT6796D"}  # chips with this SMBus master
+LD_SMBUS, REG_SMBA = 0x0B, 0x62
+# SMBus master registers, offsets from its base address (SMBA)
+DAT, CMD, IDX, CTL, ADD, ERR, STS = 0x0, 0x2, 0x3, 0x4, 0x5, 0x9, 0xE
+READ_BYTE, WRITE_BYTE, WRITE_WORD = 0, 8, 9
+MANUAL_START, SOFT_RESET, NO_ACK, MANUAL_ACTIVE = 0x80, 0x40, 0x20, 0x04
+
+AURA_ADDRESSES = (0x40, 0x4E, 0x4F)  # where ASUS puts the motherboard controller
+REG_NAME, REG_MICRON, REG_CONFIG = 0x1000, 0x1030, 0x1C00
+REG_DIRECT, REG_MODE, REG_SPEED, REG_DIRECTION, REG_APPLY = 0x8020, 0x8021, 0x8022, 0x8023, 0x80A0
+EFFECT_V1, EFFECT_V2 = 0x8010, 0x8160
+V2 = {"AUMA0-E6K5-0104", "AUMA0-E6K5-0105", "AUMA0-E6K5-0106", "AUDA0-E6K5-0101"}
+MODES = {"off": 0, "static": 1, "breathing": 2, "rainbow": 4}  # 4 = ENE spectrum cycle
+SPEED_NORMAL = 0x02
+LOCK = "/run/led-aura.lock"
+
+
+class Bus:
+    """The NCT679x SMBus master, one transaction at a time, via /dev/port."""
+
+    def __init__(self):
+        self.fd = os.open("/dev/port", os.O_RDWR)
+        self.base = self._find_base()
+
+    def out(self, port, val):
+        os.pwrite(self.fd, bytes([val]), port)
+
+    def inp(self, port):
+        return os.pread(self.fd, 1, port)[0]
+
+    def _sio(self, reg):
+        self.out(SIO, reg)
+        return self.inp(SIO + 1)
+
+    def _find_base(self):
+        self.out(SIO, 0x87)  # enter extended function mode
+        self.out(SIO, 0x87)
+        try:
+            chip = (self._sio(0x20) << 8 | self._sio(0x21)) & 0xFFF0
+            if chip not in NCT_IDS:
+                raise RuntimeError(f"no supported Nuvoton Super I/O at {SIO:#x} (id {chip:#06x})")
+            self.out(SIO, 0x07)  # select the SMBus logical device
+            self.out(SIO + 1, LD_SMBUS)
+            base = (self._sio(REG_SMBA) << 8 | self._sio(REG_SMBA + 1)) & ~7
+            if not base:
+                raise RuntimeError("Super I/O SMBus has no base address (disabled in firmware?)")
+            self.chip = NCT_IDS[chip]
+            return base
+        finally:  # exit config mode, exactly as the kernel's superio_exit()
+            self.out(SIO, 0xAA)
+            self.out(SIO, 0x02)
+            self.out(SIO + 1, 0x02)
+
+    def _xfer(self, addr, read, index, command, data=()):
+        b = self.base
+        self.out(b + CTL, SOFT_RESET)
+        self.out(b + ADD, (addr << 1) | read)
+        self.out(b + IDX, index)
+        for d in data:
+            self.out(b + DAT, d)
+        self.out(b + CMD, command)
+        self.out(b + CTL, MANUAL_START)
+        for _ in range(400):
+            if not self.inp(b + STS) & MANUAL_ACTIVE:
+                break
+            time.sleep(0.0003)
+        else:
+            raise TimeoutError(f"SMBus timeout at {addr:#x}")
+        if self.inp(b + ERR) & NO_ACK:
+            raise OSError(f"no ACK from {addr:#x}")
+        return self.inp(b + DAT) if read else None
+
+    def read_byte_data(self, addr, reg):
+        return self._xfer(addr, 1, reg, READ_BYTE)
+
+    def write_byte_data(self, addr, reg, val):
+        self._xfer(addr, 0, reg, WRITE_BYTE, [val])
+
+    def write_word_data(self, addr, reg, word):
+        self._xfer(addr, 0, reg, WRITE_WORD, [word & 0xFF, word >> 8])
+
+
+class Aura:
+    """An ENE controller: 16-bit registers reached through an address pointer."""
+
+    def __init__(self, bus, addr):
+        self.bus, self.addr = bus, addr
+        self.name = bytes(self.read(REG_NAME + i) for i in range(16)).split(b"\0")[0].decode("ascii", "replace")
+        self.config = [self.read(REG_CONFIG + i) for i in range(64)]
+        self.leds = self.config[2]
+        self.effect = EFFECT_V2 if self.name in V2 else EFFECT_V1
+
+    def _point(self, reg):
+        self.bus.write_word_data(self.addr, 0x00, ((reg << 8) & 0xFF00) | (reg >> 8))
+
+    def read(self, reg):
+        self._point(reg)
+        return self.bus.read_byte_data(self.addr, 0x81)
+
+    def write(self, reg, val):
+        self._point(reg)
+        self.bus.write_byte_data(self.addr, 0x01, val)
+
+    def set(self, color, mode):
+        r, g, b = (int(color[i:i + 2], 16) for i in (0, 2, 4))
+        self.write(REG_DIRECT, 0)  # use the controller's own effect engine
+        self.write(REG_APPLY, 1)
+        for i in range(self.leds):  # ENE stores colours as R, B, G
+            for off, v in enumerate((r, b, g)):
+                self.write(self.effect + 3 * i + off, v)
+        self.write(REG_APPLY, 1)
+        self.write(REG_MODE, MODES[mode])
+        self.write(REG_SPEED, SPEED_NORMAL)
+        self.write(REG_DIRECTION, 0)
+        self.write(REG_APPLY, 1)
+
+
+def is_aura(bus, addr):
+    """OpenRGB's TestForENESMBusController: ACK, then registers 0xA0-0xAF read back 0-15."""
+    try:
+        bus.read_byte_data(addr, 0x00)
+        if any(bus.read_byte_data(addr, r) != r - 0xA0 for r in range(0xA0, 0xB0)):
+            return False
+        probe = Aura.__new__(Aura)
+        probe.bus, probe.addr = bus, addr
+        return bytes(probe.read(REG_MICRON + i) for i in range(6)) != b"Micron"
+    except OSError:
+        return False
+
+
+def find():
+    bus = Bus()
+    for addr in AURA_ADDRESSES:
+        if is_aura(bus, addr):
+            return bus, Aura(bus, addr)
+    return bus, None
+
+
+def main():
+    args = sys.argv[1:]
+    ok = args == ["probe"] or (len(args) == 3 and args[0] == "set"
+                               and re.fullmatch(r"[0-9A-Fa-f]{6}", args[1]) and args[2] in MODES)
+    if not ok:
+        sys.exit(__doc__)
+    with open(LOCK, "w") as lock:  # one bus user at a time (watch + tick can overlap)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        bus, aura = find()
+        if args[0] == "set":
+            if not aura:
+                sys.exit("no Aura controller found")
+            aura.set(args[1], args[2])
+        print(json.dumps({"found": bool(aura), "chip": bus.chip, "smbus": f"{bus.base:#x}",
+                          **({"address": f"{aura.addr:#x}", "name": aura.name, "leds": aura.leds,
+                              "config": " ".join(f"{c:02X}" for c in aura.config[:32])} if aura else {})}))
+
+
+if __name__ == "__main__":
+    main()

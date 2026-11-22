@@ -20,6 +20,7 @@ systemctl --user enable --now openrgb.service led-schedule.timer
 systemctl --user enable led-idle.service && systemctl --user restart led-idle.service  # picks up new `led`
 
 omarchy hook install theme-set hooks/led-theme-set >/dev/null
+cmp -s led-aura /usr/local/libexec/led-aura || echo "motherboard helper not installed/outdated: run sudo ./install-aura.sh"
 
 grep -q '"com.pgeneva.omarchy_led_controller"' ~/.config/omarchy/shell.json 2>/dev/null || omarchy plugin enable com.pgeneva.omarchy_led_controller
 if (( qml_changed )); then omarchy restart shell >/dev/null 2>&1; echo "UI changed: restarted shell"; fi

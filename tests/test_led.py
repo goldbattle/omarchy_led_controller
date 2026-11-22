@@ -107,19 +107,20 @@ with tempfile.TemporaryDirectory() as d:
     assert led.theme_color() == "F38D70"
     (led.THEME / "keyboard.rgb").write_text("#ff00ff\n")  # tokyo-night style override: ignored
     assert led.look(dict(led.DEFAULTS, color="theme")) == ("F38D70", "static")
-    # chromium.theme: Omarchy's default is the background (ignored); a theme's own tint wins
-    (led.THEME / "colors.toml").write_text('accent = "#56949f"\nbackground = "#faf4ed"\n')
-    (led.THEME / "chromium.theme").write_text("250,244,237\n")
-    assert led.theme_color() == "56949F"
+    # dark themes: the accent; a grey accent becomes white; chromium.theme doesn't matter
+    (led.THEME / "colors.toml").write_text('accent = "#faa968"\nbackground = "#05182e"\n')
+    (led.THEME / "chromium.theme").write_text("0,23,46\n")           # retro-82's dark shade
+    assert led.theme_mode() == "dark" and led.theme_color() == "FAA968"
+    (led.THEME / "colors.toml").write_text('accent = "#8d8d8d"\nbackground = "#000000"\n')
+    assert led.theme_color() == "FFFFFF"                  # vantablack's grey accent -> white
+    # light themes: the browser colour (the background, or the theme's own tint)
+    (led.THEME / "colors.toml").write_text('mode = "light"\naccent = "#56949f"\nbackground = "#faf4ed"\n')
     (led.THEME / "chromium.theme").write_text("210,196,219\n")       # rose-pine lavender
-    assert led.theme_color() == "D2C4DB"
-    (led.THEME / "chromium.theme").write_text("0,23,46\n")           # retro-82: dark shade, not a tint
-    assert led.theme_color() == "56949F"
+    assert led.theme_mode() == "light" and led.theme_color() == "D2C4DB"
     (led.THEME / "chromium.theme").write_text("garbage\n")
-    assert led.theme_color() == "56949F"
+    assert led.theme_color() == "FAF4ED"                  # unreadable: the background
     (led.THEME / "chromium.theme").unlink()
-    (led.THEME / "colors.toml").write_text('accent = "#6e6e6e"\nbackground = "#ffffff"\n')  # "white" theme
-    assert led.theme_color() == "FFFFFF"                  # grey accent -> clean white
+    assert led.theme_color() == "FAF4ED"
     # palette slots: "theme:magenta" follows that slot; a missing slot falls back to "theme"
     (led.THEME / "colors.toml").write_text('accent = "#56949f"\nmagenta = "#907aa9"\nbackground = "#faf4ed"\n')
     assert led.theme_palette()["magenta"] == "907AA9"

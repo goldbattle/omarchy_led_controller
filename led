@@ -278,26 +278,36 @@ def theme_palette() -> dict[str, str]:
 
 
 def theme_color() -> str:
-    """The colour "theme" means. Usually the theme's accent. But a theme can give the browser
-    its own tint in chromium.theme ("R,G,B"; Omarchy fills it with the background otherwise),
-    and that hand-picked tint is the theme's signature colour: rose-pine's accent is teal while
-    its browser is lavender. So a chromium.theme that differs from the background wins, as long
-    as it's bright enough to be an LED colour: dark themes that set one (retro-82, lumon,
-    last-horizon) just pick another near-black background shade (brightest channel < 0.2,
-    vs 0.86+ for rose-pine and flexoki-light). (Not keyboard.rgb: some themes override that
-    oddly, e.g. tokyo-night is magenta there.)"""
+    """The colour "theme" means: what the theme looks like at a glance, as an LED colour.
+
+    Light themes: the screen is mostly the light background (terminals, the browser), so use
+    the browser's colour, chromium.theme ("R,G,B"). Omarchy fills it with the background unless
+    the theme picked its own tint (rose-pine: lavender), so it covers both.
+
+    Dark themes: the background is near black, which isn't an LED colour, so use the accent,
+    the colour that stands out (retro-82 orange, ristretto peach). A colourless accent (the
+    greys of vantablack, solitude) would be a dim, dirty white: use clean white instead.
+    (Not keyboard.rgb: some themes override that oddly, e.g. tokyo-night is magenta there.)"""
     palette = theme_palette()
-    try:
-        rgb = [int(v) for v in (THEME / "chromium.theme").read_text().split(",")]
-        tint = "".join(f"{v:02X}" for v in rgb) if len(rgb) == 3 else None
-    except (OSError, ValueError):
-        tint = None
-    if tint and tint != palette.get("background") and max(rgb) >= 128:
-        return tint  # hand-picked, so kept even when pale (rose-pine's lavender)
+    if theme_mode() == "light":
+        try:
+            rgb = [int(v) for v in (THEME / "chromium.theme").read_text().split(",")]
+            if len(rgb) == 3:
+                return "".join(f"{v:02X}" for v in rgb)
+        except (OSError, ValueError):
+            pass
+        return palette.get("background", "FFFFFF")
     accent = palette.get("accent", "FFFFFF")
-    # A colourless accent (the greys of white, vantablack, solitude) is a dim, dirty white on
-    # LEDs: use clean white instead.
     return "FFFFFF" if colorsys.rgb_to_hsv(*(int(accent[i:i + 2], 16) / 255 for i in (0, 2, 4)))[1] < 0.15 else accent
+
+
+def theme_mode() -> str:
+    """ "light" or "dark", from the theme's colors.toml (dark if it doesn't say)."""
+    try:
+        m = re.search(r'^mode\s*=\s*"(\w+)"', (THEME / "colors.toml").read_text(), re.M)
+    except OSError:
+        return "dark"
+    return m[1] if m else "dark"
 
 
 def color_name(color: str) -> str:

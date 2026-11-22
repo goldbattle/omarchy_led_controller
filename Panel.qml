@@ -21,6 +21,7 @@ Panel {
   property string error: ""
   property var queue: []
   property int liveBrightness: st.brightness
+  property real liveGamma: st.gamma || 2.8
 
   property bool advanced: false
   readonly property string timeRe: "^([01]\\d|2[0-3]):[0-5]\\d$"
@@ -222,6 +223,16 @@ Panel {
               fontFamily: root.fontFamily
               onClicked: { root.error = "Restarting OpenRGB…"; root.run(["restart"]) }
             }
+          }
+
+          Text { text: "Colour depth " + Number(root.liveGamma).toFixed(1) + "  (higher = deeper, less washed out)"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+          PanelSlider {
+            width: parent.width
+            bar: root.bar
+            minimum: 1.0; maximum: 4.0; step: 0.1
+            value: root.st.gamma || 2.8
+            onMoved: function(v) { root.liveGamma = v }
+            onReleased: function(v) { root.run(["set", "-g", Number(v).toFixed(1)]) }
           }
 
           Text { text: "Custom colour (hex)"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }

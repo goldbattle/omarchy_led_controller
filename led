@@ -6,7 +6,7 @@ hardware match, so the panel, right-click, terminal and the night timer all obey
 same per-device switches. Commands print the resulting state as JSON.
 
   led state
-  led set [RRGGBB|theme] [-m static|breathing|rainbow|daylight] [-b 0-100]
+  led set [RRGGBB|theme] [-m static|breathing|rainbow|daylight] [-b 0-100] [-g 1.0-4.0]
   led on | led off
   led device NAME on|off          per-device power switch
   led night NAME on|off           does auto-off apply to this device
@@ -31,7 +31,7 @@ DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": Tru
             "disabled": [],        # per-device switch off
             "auto_off": False, "off": "22:00", "on": "09:00",
             "keep_on": [],         # devices the night schedule leaves alone
-            "gamma": 2.2,          # screen->LED colour correction; raise if colours look washed out
+            "gamma": 2.8,          # screen->LED colour depth; 2.2 = textbook sRGB, higher = deeper
             # daylight mode: colour fades linearly between these, wrapping midnight.
             # Fixed clock times, not real sunset; nudge them with the seasons.
             "daylight": [["06:00", "FF0000"], ["08:00", "0040FF"], ["17:00", "0040FF"],
@@ -170,6 +170,7 @@ def main():
     s.add_argument("color", nargs="?", type=lambda c: "theme" if c == "theme" else re.fullmatch(r"#?([0-9a-fA-F]{6})", c)[1].upper())
     s.add_argument("-m", "--mode", choices=["static", "breathing", "rainbow", "daylight"])
     s.add_argument("-b", "--brightness", type=int, choices=range(0, 101), metavar="0-100")
+    s.add_argument("-g", "--gamma", type=float, metavar="1.0-4.0", help="colour depth")
     for name in ("device", "night"):
         d = sub.add_parser(name)
         d.add_argument("name")
@@ -192,6 +193,10 @@ def main():
     if a.cmd == "set":
         cfg.update(color=a.color or cfg["color"], mode=a.mode or cfg["mode"], power=True)
         cfg["brightness"] = cfg["brightness"] if a.brightness is None else a.brightness
+        if a.gamma is not None:
+            if not 1.0 <= a.gamma <= 4.0:
+                sys.exit("gamma must be 1.0-4.0")
+            cfg["gamma"] = round(a.gamma, 1)
         rt["held"] = False  # touching the lights at night overrides the schedule until morning
     elif a.cmd in ("on", "off"):
         cfg["power"] = a.cmd == "on"

@@ -114,13 +114,13 @@ def daylight(now, keys):
 
 
 def theme_color():
-    """Omarchy's per-theme RGB colour (keyboard.rgb), falling back to the theme accent."""
-    for f, pat in (("keyboard.rgb", r"#?([0-9a-fA-F]{6})"), ("colors.toml", r'^accent\s*=\s*"#([0-9a-fA-F]{6})"')):
-        try:
-            if m := re.search(pat, (THEME / f).read_text(), re.M):
-                return m[1].upper()
-        except OSError:
-            pass
+    """The theme accent: the colour the panel swatch and the desktop show. (Not keyboard.rgb:
+    some themes override that, e.g. tokyo-night is magenta there but blue everywhere else.)"""
+    try:
+        if m := re.search(r'^accent\s*=\s*"#([0-9a-fA-F]{6})"', (THEME / "colors.toml").read_text(), re.M):
+            return m[1].upper()
+    except OSError:
+        pass
     return "FFFFFF"
 
 

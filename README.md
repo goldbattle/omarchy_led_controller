@@ -18,8 +18,9 @@ led restart                                # restart OpenRGB (re-detect + re-app
 
 - **Auto-off** acts only when the window starts/ends, so turning lights on mid-window sticks
   until morning. It stacks on any mode: auto-off devices go dark, the rest keep going.
-- **Theme** colour reads `~/.local/state/omarchy/current/theme/keyboard.rgb` (Omarchy's per-theme
-  RGB colour), falling back to `accent` in `colors.toml`. A `theme-set` hook re-applies instantly.
+- **Theme** colour is `accent` from `~/.local/state/omarchy/current/theme/colors.toml`, the colour
+  the desktop shows. Not `keyboard.rgb`: some themes override it (tokyo-night: magenta vs blue accent).
+  A `theme-set` hook re-applies ~3s after a switch (it runs after Omarchy's own retint steps).
 - **Gamma**: colours are converted from screen (sRGB) to linear LED drive (`"gamma"` in
   `~/.config/led.json`, or Advanced → Colour depth), otherwise pastels like theme accents show up near-white.
   Default 2.8 (a bit deeper than textbook 2.2); `1.0` disables it.

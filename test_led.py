@@ -61,16 +61,15 @@ assert led.daylight("02:00", K) == "FF0000"           # night red, across midnig
 assert led.daylight("07:00", K) == "802080"           # sunrise halfway red -> blue
 assert led.daylight("05:00", [["06:00", "000000"]]) == "000000"  # single keyframe
 
-# theme colour: keyboard.rgb wins, colors.toml accent is the fallback
+# theme colour: the accent from colors.toml, never keyboard.rgb
 import tempfile
 with tempfile.TemporaryDirectory() as d:
     led.THEME = pathlib.Path(d)
     assert led.theme_color() == "FFFFFF"
     (led.THEME / "colors.toml").write_text('mode = "dark"\naccent = "#f38d70"\n')
     assert led.theme_color() == "F38D70"
-    (led.THEME / "keyboard.rgb").write_text("#00ff00\n")
-    assert led.theme_color() == "00FF00"
-    assert led.look(dict(led.DEFAULTS, color="theme")) == ("00FF00", "static")
+    (led.THEME / "keyboard.rgb").write_text("#ff00ff\n")  # tokyo-night style override: ignored
+    assert led.look(dict(led.DEFAULTS, color="theme")) == ("F38D70", "static")
 
 # retry path: fake openrgb that demands 2 colours the first time
 calls = []

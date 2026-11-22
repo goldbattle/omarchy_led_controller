@@ -70,7 +70,7 @@ DEFAULTS: Config = {"color": "8000FF", "mode": "static", "brightness": 100, "pow
             "disabled": [],        # per-device switch off
             "auto_off": False, "off": "22:00", "on": "09:00",
             "idle_off": True,      # all LEDs off while every monitor is DPMS-off (screensaver -> black)
-            "gamma": 2.8,          # screen->LED colour depth; 2.2 = textbook sRGB, higher = deeper
+            "gamma": 3.0,          # screen->LED colour depth; 2.2 = textbook sRGB, higher = deeper
             "location": [37.77, -122.42]}  # flux follows the sun here (default San Francisco)
 # flux: sun elevation (degrees) -> colour temperature (K). Day white, sunset warm,
 # dusk candlelight, then fading to pure red ("darkroom") by nautical dusk.

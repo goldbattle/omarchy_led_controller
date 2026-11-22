@@ -96,7 +96,7 @@ Panel {
   // Slider values while you are still dragging. The label follows your finger
   // straight away; the command is only sent when you let go.
   property int liveBrightness: st.brightness
-  property real liveGamma: st.gamma || 2.8
+  property real liveGamma: st.gamma || 3.0
 
   // Whether the Advanced section is expanded.
   property bool advanced: false
@@ -409,7 +409,7 @@ Panel {
             width: parent.width
             bar: root.bar
             minimum: 1.0; maximum: 4.0; step: 0.1
-            value: root.st.gamma || 2.8
+            value: root.st.gamma || 3.0
             onMoved: function(v) { root.liveGamma = v }
             onReleased: function(v) { root.run(["set", "-g", Number(v).toFixed(1)]) }
           }

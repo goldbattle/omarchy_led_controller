@@ -207,25 +207,6 @@ Panel {
           width: parent.width
           spacing: Style.space(10)
 
-          RowLayout {
-            width: parent.width
-            Button {
-              Layout.fillWidth: true
-              text: root.st.power && !root.st.held ? "Turn all off" : "Turn all on"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.run([root.st.power && !root.st.held ? "off" : "on"])
-            }
-            Button {
-              Layout.fillWidth: true
-              text: "Restart OpenRGB"
-              tooltipText: "Re-detect devices and re-apply"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: { root.error = "Restarting OpenRGB…"; root.run(["restart"]) }
-            }
-          }
-
           Text { text: "Colour depth " + Number(root.liveGamma).toFixed(1) + "  (higher = deeper, less washed out)"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
           PanelSlider {
             width: parent.width
@@ -308,6 +289,25 @@ Panel {
               var loc = [Number(m[1]), Number(m[2])]
               if (root.st.location && loc[0] === root.st.location[0] && loc[1] === root.st.location[1]) return
               root.setSchedule({ location: loc })  // led validates the ranges
+            }
+          }
+
+          RowLayout {
+            width: parent.width
+            Button {
+              Layout.fillWidth: true
+              text: root.st.power && !root.st.held ? "Turn all off" : "Turn all on"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.run([root.st.power && !root.st.held ? "off" : "on"])
+            }
+            Button {
+              Layout.fillWidth: true
+              text: "Restart OpenRGB"
+              tooltipText: "Re-detect devices and re-apply"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: { root.error = "Restarting OpenRGB…"; root.run(["restart"]) }
             }
           }
         }

@@ -87,8 +87,11 @@ AURA_CACHE = RUNTIME.with_name("led-aura.json")  # probe result, once per boot
 HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 
-def openrgb(*args: str) -> str:
-    r = subprocess.run(["openrgb", *args], capture_output=True, text=True, timeout=20)
+def openrgb(*args: str, timeout: float = 20) -> str:
+    try:
+        r = subprocess.run(["openrgb", *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:  # the client hangs now and then; callers see an error
+        return f"error: openrgb {' '.join(args)} didn't answer within {timeout:g}s"
     return r.stdout + r.stderr  # exit code is 0 even on errors; callers check the text
 
 
@@ -222,6 +225,14 @@ def theme_color() -> str:
     return "FFFFFF"
 
 
+def theme_name() -> str:
+    """The current Omarchy theme's name, e.g. "tokyo-night" ("" if unknown)."""
+    try:
+        return THEME.with_name("theme.name").read_text().strip()
+    except OSError:
+        return ""
+
+
 def look(cfg: Config) -> tuple[str, str]:
     """(colour, mode) to show right now."""
     if cfg["mode"] == "flux":
@@ -303,15 +314,23 @@ def aura_set(color: str, mode: str) -> None:
 
 
 def devices() -> list[Device]:
-    devs = parse(openrgb("-ld"))
+    text = openrgb("-ld")
+    devs = parse(text)
+    if not devs and text.startswith("error:"):
+        sys.exit(text)
     return devs + [a] if (a := aura_device()) else devs
 
 
 def stuck(calls: list[list[str]]) -> list[list[str]]:
     """The `build` calls whose mode didn't take. When several devices change at once, the
     OpenRGB server (1.1) sometimes drops a mode change: the Commander PRO stays on Rainbow
-    Wave after rainbow -> static. Sending the same call again on its own always works."""
-    active = {d["index"]: d["active"] for d in parse(openrgb("-ld"))}
+    Wave after rainbow -> static. Measured: with 0.3s between calls it still happens every
+    time, with 1s it never does. Pacing every call would make each click take seconds, while
+    sending the dropped call again on its own always works, so read back and retry instead."""
+    devs = parse(openrgb("-ld", timeout=5))
+    if not devs:  # couldn't read back: the changes were sent, so don't guess
+        return []
+    active = {d["index"]: d["active"] for d in devs}
     return [c for c in calls if active.get(int(c[1])) != c[3]]
 
 
@@ -439,7 +458,7 @@ def main() -> None:
         save(RUNTIME, rt)  # after sync: a failed apply is retried next tick
     if a.cmd != "tick":
         print(json.dumps({**cfg, "held": rt["held"], "shown": look(cfg)[0], "flux": flux_now(cfg)[1],
-                          "devices": devs}))
+                          "theme": theme_name(), "devices": devs}))
 
 
 if __name__ == "__main__":

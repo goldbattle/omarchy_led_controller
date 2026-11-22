@@ -23,7 +23,8 @@ the motherboard bus, so they run anywhere.
 Everything is fully typed, and checked in strict mode:
 
 ```
-uvx mypy --strict --python-version 3.14 --scripts-are-modules led extras/asus-aura/led-aura tests/*.py
+uvx mypy --strict --python-version 3.14 --scripts-are-modules led extras/asus-aura/led-aura tests/*.py \
+  .claude/skills/hardware-playbook/playbook.py
 ```
 
 This needs `uv` (it fetches mypy on first use). If `uvx` isn't installed, ask before installing it

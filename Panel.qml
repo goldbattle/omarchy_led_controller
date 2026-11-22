@@ -74,7 +74,8 @@ Panel {
   //   devices     the devices OpenRGB found, each with at least a `name`
   // `led` also sends a few extras that are read below when present:
   //   shown (the colour actually on the LEDs right now), flux (the current Flux
-  //   step, e.g. "3400K"), gamma, idle_off and location.
+  //   step, e.g. "3400K"), theme (the Omarchy theme's name, e.g. "tokyo-night"),
+  //   gamma, idle_off and location.
   property var st: ({ color: "8000FF", mode: "static", brightness: 100, power: true, held: false,
                       disabled: [], auto_off: false, off: "22:00", on: "09:00", devices: [] })
 
@@ -127,6 +128,15 @@ Panel {
 
   // Change colour, effect and brightness together.
   function setLook(color, mode, brightness) { run(["set", color, "-m", mode, "-b", String(brightness)]) }
+
+  // What the lights are showing, for the header: "static · tokyo-night",
+  // "breathing · #8000FF", "flux · 3400K", or just "rainbow" (it has no colour).
+  function lookText() {
+    if (st.mode === "flux") return "flux" + (st.flux ? " · " + st.flux : "")
+    if (st.mode === "rainbow") return "rainbow"
+    if (st.color === "theme") return st.mode + " · " + (st.theme || "theme")
+    return st.mode + " · #" + st.color
+  }
 
   // Change one or more schedule settings, e.g. setSchedule({ off: "23:00" }).
   function setSchedule(patch) { run(["schedule", JSON.stringify(patch)]) }
@@ -210,7 +220,7 @@ Panel {
           meta: root.error !== "" ? root.error
               : !root.st.power ? "Off"
               : root.st.held ? "Night off until " + root.st.on
-              : root.st.devices.length + " devices · " + root.st.mode
+              : root.st.devices.length + " devices · " + root.lookText()
           foreground: root.foreground
           fontFamily: root.fontFamily
           iconComponent: Component {
@@ -247,14 +257,15 @@ Panel {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.setLook(parent.modelData, root.colorMode(), root.st.brightness)
               }
-              // The "theme" swatch carries a small palette icon so it reads as
-              // "follow the theme" rather than just another colour.
+              // The "theme" swatch carries the Omarchy logo (the same glyph as the
+              // bar's menu button) so it reads as "follow the theme" rather than
+              // just another colour.
               Text {
                 visible: parent.modelData === "theme"
                 anchors.centerIn: parent
-                text: "󰏘"
+                text: "\ue900"
                 color: Color.background
-                font.family: root.fontFamily
+                font.family: "omarchy"
                 font.pixelSize: Style.font.caption
               }
             }

@@ -74,12 +74,9 @@ A few things worth knowing:
   `led restart`.
 - **A device is missing**: run `led restart`. If it still doesn't show up, check whether
   `openrgb --list-devices` sees it; if not, it's an OpenRGB issue.
-
-## Development
-
-Work in a clone anywhere and run `./install.sh`. It runs the tests in `tests/`, copies the
-plugin into Omarchy, and restarts the shell if the UI changed. In Claude Code, `/run-tests`
-runs the tests plus type checks, and `/update-screenshot` retakes `preview.png`.
+- **Changing the code, or checking it on your hardware**: see
+  [docs/development.md](docs/development.md) for how to install a clone and the agent skills
+  that run the tests and a live hardware check.
 
 ## Tested hardware
 
@@ -97,9 +94,8 @@ every effect, brightness and the on/off switch all behave.
 The [extras](extras/) folder holds optional add-ons for hardware OpenRGB can't reach yet.
 **You don't need it** unless a row above links you there.
 
-**Add your hardware.** Open [Claude Code](https://claude.com/claude-code) in this repo and
-run `/add-tested-hardware`. It finds your devices, walks you through a quick test of each
-one (you watch the lights and say what happened), puts your settings back afterwards, and
-adds the results to this table. No serial numbers or other details about your machine are
-recorded. Then open a pull request. You can also test by hand with the `led` commands above
-and add a row yourself.
+**Add your hardware.** Run the agent skill `/add-tested-hardware` in this repo. It finds your
+devices, walks you through a quick test of each one (you watch the lights and say what
+happened), puts your settings back afterwards, and adds the results to this table. No serial
+numbers or other details about your machine are recorded. Then open a pull request. You can
+also test by hand with the `led` commands above and add a row yourself.

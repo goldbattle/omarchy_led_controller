@@ -26,9 +26,11 @@ assert [d["active"] for d in devs] == ["Rainbow Wave", "Direct", "Direct"]  # th
 
 # stuck: calls whose mode the server didn't take (device 0 reports Rainbow Wave, not Direct)
 real_openrgb = led.openrgb
-led.openrgb = lambda *a: SAMPLE
+led.openrgb = lambda *a, **k: SAMPLE
 assert led.stuck([["-d", "0", "-m", "Direct", "-c", "FF0000"], ["-d", "1", "-m", "Direct", "-c", "FF0000"],
                   ["-d", "3", "-m", "Direct", "-c", "FF0000"]]) == [["-d", "0", "-m", "Direct", "-c", "FF0000"]]
+led.openrgb = lambda *a, **k: "error: openrgb -ld didn't answer within 5s"
+assert led.stuck([["-d", "0", "-m", "Direct", "-c", "FF0000"]]) == []  # no read-back: no retry
 led.openrgb = real_openrgb
 
 assert led.build(devs, "FF8000", "static", 50) == [
@@ -103,6 +105,10 @@ with tempfile.TemporaryDirectory() as d:
     assert led.theme_color() == "F38D70"
     (led.THEME / "keyboard.rgb").write_text("#ff00ff\n")  # tokyo-night style override: ignored
     assert led.look(dict(led.DEFAULTS, color="theme")) == ("F38D70", "static")
+    assert led.theme_name() == ""                         # no theme.name next to the theme dir
+    (pathlib.Path(d) / "theme.name").write_text("tokyo-night\n")
+    led.THEME = pathlib.Path(d) / "theme"
+    assert led.theme_name() == "tokyo-night"
 
 # motherboard (aura) devices: skipped by the OpenRGB builder, driven through led-aura by sync
 board: dict[str, Any] = {"index": None, "name": "ASUS PRIME X299-A", "type": "Motherboard", "backend": "aura", "modes": []}
@@ -133,6 +139,10 @@ fake_hyprctl([])
 assert not led.screens_off()
 led.subprocess.run = lambda *a, **k: sp.CompletedProcess(a, 1, stdout="")
 assert not led.screens_off()
+def hang(*a: Any, **k: Any) -> Any:
+    raise sp.TimeoutExpired("openrgb", 5)
+led.subprocess.run = hang
+assert led.openrgb("-ld", timeout=5) == "error: openrgb -ld didn't answer within 5s"
 led.subprocess.run = real_run
 
 # retry path: fake openrgb that demands 2 colours the first time

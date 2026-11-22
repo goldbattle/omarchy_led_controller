@@ -50,6 +50,19 @@ cfg["idle_off"] = True
 cfg["power"] = False
 assert names(False) == []                  # global off beats everything
 
+# device switch after "all off" lights just that device; normal toggles keep the others
+names = [GPU, CMD, AIO]
+c, r = dict(led.DEFAULTS, power=False, disabled=[CMD]), {"held": False}
+led.switch_device(c, r, names, AIO, True)
+assert c["power"] and set(c["disabled"]) == {GPU, CMD} and [d["name"] for d in led.lit(c, r, devs)] == [AIO]
+led.switch_device(c, r, names, GPU, True)
+assert c["disabled"] == [CMD]                            # now just adds GPU back
+led.switch_device(c, r, names, GPU, False)
+assert set(c["disabled"]) == {CMD, GPU}
+c, r = dict(led.DEFAULTS), {"held": True}                # night hold: switching on lifts it
+led.switch_device(c, r, names, GPU, True)
+assert not r["held"] and [d["name"] for d in led.lit(c, r, devs)] == [GPU, CMD, AIO]
+
 # night window, wrapping midnight and not
 assert led.in_window("23:00", "22:00", "09:00") and led.in_window("08:59", "22:00", "09:00")
 assert not led.in_window("09:00", "22:00", "09:00") and not led.in_window("21:59", "22:00", "09:00")

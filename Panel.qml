@@ -178,7 +178,8 @@ Panel {
           model: root.st.devices
           RowLayout {
             required property var modelData
-            readonly property bool isOn: !root.has(root.st.disabled, modelData.name)
+            // shows off while everything is dark (all off / night), so flipping it means "turn on"
+            readonly property bool isOn: root.st.power && !root.st.held && !root.has(root.st.disabled, modelData.name)
             width: column.width
             Text {
               Layout.fillWidth: true

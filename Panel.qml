@@ -75,6 +75,7 @@ Panel {
   // `led` also sends a few extras that are read below when present:
   //   shown (the colour actually on the LEDs right now), flux (the current Flux
   //   step, e.g. "3400K"), theme (the Omarchy theme's name, e.g. "tokyo-night"),
+  //   theme_color (the RRGGBB that "theme" stands for right now),
   //   color_name (a rough name for the colour, e.g. "purple"), gamma, idle_off
   //   and location.
   property var st: ({ color: "8000FF", mode: "static", brightness: 100, power: true, held: false,
@@ -271,7 +272,10 @@ Panel {
               required property string modelData
               readonly property bool picked: root.st.mode !== "flux" && root.st.color === modelData
               width: Style.space(26); height: width; radius: width / 2
-              color: modelData === "theme" ? Color.accent : "#" + modelData
+              // The theme swatch shows the colour the LEDs get for "theme" (see
+              // theme_color in `led`), which isn't always the desktop accent.
+              color: modelData === "theme" ? (root.st.theme_color ? "#" + root.st.theme_color : Color.accent)
+                                           : "#" + modelData
               border.width: picked ? 3 : 1
               border.color: picked ? root.foreground : root.dim
               MouseArea {

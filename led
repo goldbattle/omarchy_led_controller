@@ -263,14 +263,26 @@ def flux_now(cfg: Config) -> tuple[str, str]:
 
 
 def theme_color() -> str:
-    """The theme accent: the colour the panel swatch and the desktop show. (Not keyboard.rgb:
-    some themes override that, e.g. tokyo-night is magenta there but blue everywhere else.)"""
+    """The colour "theme" means. Usually the theme's accent. But a theme can give the browser
+    its own tint in chromium.theme ("R,G,B"; Omarchy fills it with the background otherwise),
+    and that hand-picked tint is the theme's signature colour: rose-pine's accent is teal while
+    its browser is lavender. So a chromium.theme that differs from the background wins.
+    (Not keyboard.rgb: some themes override that oddly, e.g. tokyo-night is magenta there.)"""
     try:
-        if m := re.search(r'^accent\s*=\s*"#([0-9a-fA-F]{6})"', (THEME / "colors.toml").read_text(), re.M):
-            return m[1].upper()
+        colors = (THEME / "colors.toml").read_text()
     except OSError:
-        pass
-    return "FFFFFF"
+        return "FFFFFF"
+    def hex_of(key: str) -> str | None:
+        m = re.search(rf'^{key}\s*=\s*"#([0-9a-fA-F]{{6}})"', colors, re.M)
+        return m[1].upper() if m else None
+    try:
+        rgb = [int(v) for v in (THEME / "chromium.theme").read_text().split(",")]
+        tint = "".join(f"{v:02X}" for v in rgb) if len(rgb) == 3 else None
+    except (OSError, ValueError):
+        tint = None
+    if tint and tint != hex_of("background"):
+        return tint
+    return hex_of("accent") or "FFFFFF"
 
 
 def color_name(color: str) -> str:
@@ -544,7 +556,8 @@ def main() -> None:
         save(RUNTIME, rt)  # after sync: a failed apply is retried next tick
     if a.cmd != "tick":
         print(json.dumps({**cfg, "held": rt["held"], "shown": look(cfg)[0], "flux": flux_now(cfg)[1],
-                          "theme": theme_name(), "color_name": color_name(look(cfg)[0]),
+                          "theme": theme_name(), "theme_color": theme_color(),
+                          "color_name": color_name(look(cfg)[0]),
                           "devices": devs}))
 
 

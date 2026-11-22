@@ -107,6 +107,14 @@ with tempfile.TemporaryDirectory() as d:
     assert led.theme_color() == "F38D70"
     (led.THEME / "keyboard.rgb").write_text("#ff00ff\n")  # tokyo-night style override: ignored
     assert led.look(dict(led.DEFAULTS, color="theme")) == ("F38D70", "static")
+    # chromium.theme: Omarchy's default is the background (ignored); a theme's own tint wins
+    (led.THEME / "colors.toml").write_text('accent = "#56949f"\nbackground = "#faf4ed"\n')
+    (led.THEME / "chromium.theme").write_text("250,244,237\n")
+    assert led.theme_color() == "56949F"
+    (led.THEME / "chromium.theme").write_text("210,196,219\n")       # rose-pine lavender
+    assert led.theme_color() == "D2C4DB"
+    (led.THEME / "chromium.theme").write_text("garbage\n")
+    assert led.theme_color() == "56949F"
     assert led.theme_name() == ""                         # no theme.name next to the theme dir
     (pathlib.Path(d) / "theme.name").write_text("tokyo-night\n")
     led.THEME = pathlib.Path(d) / "theme"

@@ -7,6 +7,8 @@ from typing import Any
 p = str(pathlib.Path(__file__).parent.parent / "led")
 led: Any = types.ModuleType("led")
 importlib.machinery.SourceFileLoader("led", p).exec_module(led)
+import tempfile as _tf
+led.COLORS = pathlib.Path(_tf.mkdtemp()) / "led-colors.json"  # never touch the real cache
 
 SAMPLE = """0: EVGA GeForce RTX 3080 FTW3 Ultra LHR
   Type:           GPU
@@ -29,7 +31,7 @@ real_openrgb = led.openrgb
 led.openrgb = lambda *a, **k: SAMPLE
 assert led.stuck([["-d", "0", "-m", "Direct", "-c", "FF0000"], ["-d", "1", "-m", "Direct", "-c", "FF0000"],
                   ["-d", "3", "-m", "Direct", "-c", "FF0000"]]) == [["-d", "0", "-m", "Direct", "-c", "FF0000"]]
-led.openrgb = lambda *a, **k: "error: openrgb -ld didn't answer within 5s"
+led.openrgb = lambda *a, **k: "error: openrgb -ld didn't answer (twice, 5s each)"
 assert led.stuck([["-d", "0", "-m", "Direct", "-c", "FF0000"]]) == []  # no read-back: no retry
 led.openrgb = real_openrgb
 
@@ -116,7 +118,7 @@ assert led.build(devs[:1] + [board], "FF0000", "static", 100) == [["-d", "0", "-
 sent: list[tuple[str, str]] = []
 applied: list[list[str]] = []
 led.aura_set, real_apply = (lambda c, m: sent.append((c, m))), led.apply
-led.apply = lambda args: applied.append(args)
+led.apply = lambda calls, counts, names: applied.extend(calls)
 led.stuck, real_stuck = (lambda calls: []), led.stuck  # every mode took
 cfg2 = dict(led.DEFAULTS, color="F38D70", brightness=50, gamma=2.8)
 led.sync(cfg2, {"held": False}, devs[:1] + [board])
@@ -130,7 +132,7 @@ real_sleep, real_now = led.time.sleep, led.time.time
 led.time.sleep, led.time.time = naps.append, lambda: 1000.0
 rt3: dict[str, Any] = {"held": False, "synced": 999.7}
 led.sync(cfg2, rt3, devs[:1])
-assert len(naps) == 1 and abs(naps[0] - 0.7) < 1e-9 and rt3["synced"] == 1000.0
+assert len(naps) == 1 and abs(naps[0] - (led.MIN_GAP - 0.3)) < 1e-9 and rt3["synced"] == 1000.0
 naps.clear()
 led.sync(cfg2, {"held": False, "synced": 990.0}, devs[:1])  # long ago: no wait
 assert naps == []
@@ -153,20 +155,43 @@ assert not led.screens_off()
 def hang(*a: Any, **k: Any) -> Any:
     raise sp.TimeoutExpired("openrgb", 5)
 led.subprocess.run = hang
-assert led.openrgb("-ld", timeout=5) == "error: openrgb -ld didn't answer within 5s"
+tries: list[int] = []
+def hang_then_answer(*a: Any, **k: Any) -> Any:
+    tries.append(1)
+    if len(tries) == 1:
+        raise sp.TimeoutExpired("openrgb", 5)
+    return sp.CompletedProcess(a, 0, stdout="0: GPU\n", stderr="")
+led.subprocess.run = hang_then_answer
+assert led.openrgb("-ld") == "0: GPU\n" and len(tries) == 2  # a hung run is replaced once
+led.subprocess.run = hang
+assert led.openrgb("-ld") == "error: openrgb -ld didn't answer (twice, 5s each)"
 led.subprocess.run = real_run
 
-# retry path: fake openrgb that demands 2 colours the first time
+# apply: every device in one openrgb run; modes that want N colours are learned once
 calls: list[list[str]] = []
 def fake_openrgb(*a: str) -> str:
+    """Like openrgb: Commander "Color Pulse" and H150i "Color Shift" insist on 2 colours,
+    and the first block that breaks that ends the whole run."""
     calls.append(list(a))
-    return "Please provide between 2 and 2 colors" if len(calls) == 1 else ""
+    blocks = " ".join(a).split("-d ")[1:]
+    for b in blocks:
+        if ("Color Pulse" in b or "Color Shift" in b) and b.count(",") != 1:
+            return "Wrong number of colors specified for mode X\nPlease provide between 2 and 2 colors"
+    return ""
 led.openrgb = fake_openrgb
-led.apply(["-d", "1", "-m", "Color Pulse", "-c", "FF0000"])
-assert calls[1][-1] == "FF0000,FF0000"
-calls.clear()  # rainbow fallback without a colour (H150i "Color Shift" wants 2)
-led.apply(["-d", "3", "-m", "Color Shift"])
-assert calls[1][-2:] == ["-c", "FF0000,0000FF"]
+counts: dict[str, int] = {}
+index_names = {"0": "GPU", "1": "Commander", "3": "H150i"}
+batch = [["-d", "0", "-m", "Direct", "-c", "FF0000"], ["-d", "1", "-m", "Color Pulse", "-c", "FF0000"],
+         ["-d", "3", "-m", "Color Shift"]]
+led.apply([list(c) for c in batch], counts, index_names)
+assert counts == {"Commander:Color Pulse": 2, "H150i:Color Shift": 2}  # learned the first time
+calls.clear()
+led.apply([list(c) for c in batch], counts, index_names)
+assert calls == [["-d", "0", "-m", "Direct", "-c", "FF0000", "-d", "1", "-m", "Color Pulse", "-c", "FF0000,FF0000",
+                  "-d", "3", "-m", "Color Shift", "-c", "FF0000,0000FF"]]  # then one run for all
+calls.clear()
+led.apply([], counts, index_names)
+assert calls == []  # nothing to send: no openrgb run at all
 # colour names for the panel header: every preset swatch, plus custom colours
 names_of = {"FFFFFF": "white", "FF0000": "red", "FF6000": "orange", "FFC000": "yellow", "00FF00": "green",
             "00FFFF": "cyan", "0000FF": "blue", "8000FF": "purple", "FF00A0": "pink"}

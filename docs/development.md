@@ -27,8 +27,15 @@ The repo ships [agent skills](../.claude/skills/) for the routine checks:
 ## Things worth knowing
 
 - The `openrgb` command exits with 0 even when it fails, so `led` checks its output for errors.
-- When several devices change at once, OpenRGB sometimes drops a mode change (seen on the
-  Corsair Commander PRO). `led` reads the modes back after every change and re-sends any that
-  didn't take; see `stuck()` in `led`.
+- OpenRGB 1.1 is touchy about how changes arrive, so `led`:
+  - sends every device in **one** `openrgb` run per change (`apply()`); one run per device made
+    the Commander PRO drop mode changes and gave the client more chances to crash or hang;
+  - learns how many colours a mode insists on once per machine (`~/.cache/led-colors.json`), so
+    those batches don't trip the client's "wrong number of colours" exit;
+  - leaves at least `MIN_GAP` (0.5s) between changes and takes a lock, so the panel, the timer
+    and `led watch` never overlap;
+  - replaces an `openrgb` run that hangs for 5s with a fresh one (the client hangs now and then
+    while the server is fine);
+  - reads the modes back after each change and re-sends any that didn't take (`stuck()`).
 - The plugin is copied into Omarchy, not symlinked: the shell's file watcher doesn't follow
   symlinks.

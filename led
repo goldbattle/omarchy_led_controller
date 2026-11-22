@@ -81,9 +81,11 @@ DARKROOM = -12
 # In /run so a reboot forgets it and the next tick re-evaluates.
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "led-schedule.json"
 # Least time between two changes to the hardware. OpenRGB 1.1 drops mode changes that come
-# too soon after the previous one: measured on a Commander PRO, 0.3s between changes still
-# loses them every time, 1s never does. Calibration knob: raise it if a device still drops.
-MIN_GAP = 1.0
+# too soon after the previous one. Measured on a Commander PRO with one openrgb run per device:
+# 0.3s between changes lost them every time, 1s never did. With every device in one run (see
+# apply()) even 0s lost none of 32, so 0.5s is margin, not the fix. Calibration knob: raise it
+# if a device still drops changes (the read-back in stuck() catches and re-sends them).
+MIN_GAP = 0.5
 # Held by every led that changes something, so they take turns (see lock()).
 LOCK = RUNTIME.with_name("led.lock")
 RT_DEFAULT: Runtime = {"window": None, "held": False, "idle": False}
@@ -91,34 +93,73 @@ THEME = Path.home() / ".local/state/omarchy/current/theme"
 # Optional motherboard (ASUS Aura) backend from extras/asus-aura/. Skipped when not installed.
 AURA = "/usr/local/libexec/led-aura"
 AURA_CACHE = RUNTIME.with_name("led-aura.json")  # probe result, once per boot
+# How many colours each device's modes insist on ("device name:mode" -> N). Fixed by the
+# hardware, so learned once per machine (see apply()).
+COLORS = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "led-colors.json"
 HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 
-def openrgb(*args: str, timeout: float = 20) -> str:
-    try:
-        r = subprocess.run(["openrgb", *args], capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:  # the client hangs now and then; callers see an error
-        return f"error: openrgb {' '.join(args)} didn't answer within {timeout:g}s"
-    return r.stdout + r.stderr  # exit code is 0 even on errors; callers check the text
+def openrgb(*args: str, timeout: float = 5) -> str:
+    """Run the openrgb client against the server. Its exit code is 0 even on errors, so callers
+    check the text. Now and then a client run hangs while the server stays fine (a fresh run
+    answers in milliseconds), so a run that takes over `timeout` seconds is replaced, once.
+    Normal runs take well under 2s; re-sending the same settings is harmless."""
+    for _ in range(2):
+        try:
+            r = subprocess.run(["openrgb", *args], capture_output=True, text=True, timeout=timeout)
+            return r.stdout + r.stderr
+        except subprocess.TimeoutExpired:
+            pass
+    return f"error: openrgb {' '.join(args)} didn't answer (twice, {timeout:g}s each)"
 
 
 RAINBOWISH = ["FF0000", "0000FF", "00FF00"]  # for "rainbow" on devices that can only shift between N colours
 
 
-def apply(args: list[str]) -> None:
-    out = openrgb(*args)
-    if m := re.search(r"between (\d+) and", out):
-        # some modes want N colours: repeat ours (Commander "Color Pulse" = 2), or for
-        # colourless rainbow fallbacks (H150i "Color Shift" = 2) hand it contrasting ones
-        n = int(m[1])
-        if "-c" in args:
-            i = args.index("-c") + 1
-            args[i] = ",".join([args[i]] * n)
-        else:
-            args += ["-c", ",".join((RAINBOWISH * n)[:n])]
-        out = openrgb(*args)
-    if re.search(r"error|wrong|invalid|not found", out, re.I):
-        sys.exit(out.strip())
+def fit(call: list[str], n: int) -> None:
+    """Give a `build` call exactly n colours. Some modes insist on N: repeat ours (Commander
+    "Color Pulse" = 2), or for colourless rainbow fallbacks (H150i "Color Shift" = 2) hand it
+    contrasting ones."""
+    if "-c" in call:
+        i = call.index("-c") + 1
+        call[i] = ",".join([call[i].split(",")[0]] * n)
+    else:
+        call += ["-c", ",".join((RAINBOWISH * n)[:n])]
+
+
+def failed(out: str) -> bool:
+    return bool(re.search(r"error|wrong|invalid|not found", out, re.I))
+
+
+def apply(calls: list[list[str]], counts: dict[str, int], names: dict[str, str]) -> None:
+    """Send every call in ONE openrgb run: one connection to the server instead of one per
+    device, which is faster and gives OpenRGB's flaky client fewer chances to crash or hang.
+
+    A mode that wants exactly N colours makes openrgb print "Please provide between N and N
+    colors" and quit, dropping the rest of the batch. So `counts` ("device name:mode" -> N;
+    `names` maps the index in each call to its device name) remembers each N; the first time
+    one turns up, fall back to sending the calls one by one to learn it. After that the batch
+    goes through in one go."""
+    def key(call: list[str]) -> str:
+        return f"{names.get(call[1], call[1])}:{call[3]}"
+    for call in calls:
+        if n := counts.get(key(call)):
+            fit(call, n)
+    if not calls:
+        return
+    out = openrgb(*[arg for call in calls for arg in call])
+    if "between" not in out:
+        if failed(out):
+            sys.exit(out.strip())
+        return
+    for call in calls:  # a mode wants N colours: learn which, one device at a time
+        out = openrgb(*call)
+        if m := re.search(r"between (\d+) and", out):
+            counts[key(call)] = int(m[1])
+            fit(call, int(m[1]))
+            out = openrgb(*call)
+        if failed(out):
+            sys.exit(out.strip())
 
 
 def parse(text: str) -> list[Device]:
@@ -358,7 +399,9 @@ def stuck(calls: list[list[str]]) -> list[list[str]]:
     Wave after rainbow -> static. Measured: with 0.3s between calls it still happens every
     time, with 1s it never does. Pacing every call would make each click take seconds, while
     sending the dropped call again on its own always works, so read back and retry instead."""
-    devs = parse(openrgb("-ld", timeout=5))
+    if not calls:
+        return []
+    devs = parse(openrgb("-ld"))
     if not devs:  # couldn't read back: the changes were sent, so don't guess
         return []
     active = {d["index"]: d["active"] for d in devs}
@@ -372,10 +415,15 @@ def sync(cfg: Config, rt: Runtime, devs: list[Device]) -> None:
     calls = build(on, color, mode, cfg["brightness"], cfg["gamma"]) + build(off, "000000", "off", 100)
     if (wait := rt.get("synced", 0) + MIN_GAP - time.time()) > 0:  # see MIN_GAP
         time.sleep(wait)
-    for args in calls:
-        apply(args)
-    for args in stuck(calls):  # ponytail: one retry; loop if a device ever needs more
-        apply(args)
+    counts: dict[str, int] = load(COLORS, {})
+    known, names = dict(counts), {str(d["index"]): d["name"] for d in devs}
+    try:
+        apply(calls, counts, names)
+        apply(stuck(calls), counts, names)  # ponytail: one retry; loop if a device ever needs more
+    finally:  # keep what was learned even if a later call failed
+        if counts != known:
+            COLORS.parent.mkdir(parents=True, exist_ok=True)
+            save(COLORS, counts)
     for d in devs:
         if d.get("backend") == "aura" and d in on:
             aura_set(adjust(color, cfg["brightness"], cfg["gamma"]), mode)

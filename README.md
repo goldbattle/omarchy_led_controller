@@ -31,7 +31,7 @@ change them from the panel, the terminal or a schedule.
 ## Install
 
 ```
-omarchy plugin add git@github.com:goldbattle/omarchy_led_controller.git
+omarchy plugin add https://github.com/goldbattle/omarchy_led_controller.git
 ~/.config/omarchy/plugins/com.pgeneva.omarchy_led_controller/install.sh
 ```
 

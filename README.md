@@ -49,7 +49,7 @@ restarts the shell when `Panel.qml`/`manifest.json` changed (`led`-only changes 
 | Device | Bus | Status |
 |---|---|---|
 | EVGA RTX 3080 FTW3 Ultra LHR (3842:4897) | NVIDIA i2c, addr 0x2D | works |
-| Corsair Commander PRO (1b1c:0c10) | USB HID | works; both headers sized to 204 LEDs (it can't sense what's attached) |
+| Corsair Commander PRO (1b1c:0c10) | USB HID | works; LED strips, both headers sized to **32** LEDs (it can't sense what's attached). At 204 Direct/Static still worked but every hardware effect (Breathe/Rainbow) rendered dark. If the last LEDs stay dark raise it (strips are 10 LEDs each): `openrgb -d "Corsair Commander Pro" -z 0 -sz N -z 1 -sz N` |
 | Corsair H150i Platinum (1b1c:0c12) | USB HID | works (OpenRGB calls it "H150i PRO RGB") |
 | Logitech G502 Proteus Spectrum | USB HID | works |
 | ASUS PRIME X299-A Aura | SMBus i801 (i2c-5) | **not detected**: nothing at 0x40/0x4E; 0x4F answers but isn't ENE. Check BIOS onboard-LED setting / Aura firmware before any manual probing (SMBus probing can brick RAM SPD). |

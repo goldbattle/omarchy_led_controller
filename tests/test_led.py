@@ -1,9 +1,12 @@
 import sys; sys.dont_write_bytecode = True  # keep the plugin dir clean
-import importlib.machinery, importlib.util, pathlib
+import importlib.machinery, pathlib, types
+from typing import Any
 
-p = str(pathlib.Path(__file__).with_name("led"))
-spec = importlib.util.spec_from_loader("led", importlib.machinery.SourceFileLoader("led", p))
-led = importlib.util.module_from_spec(spec); spec.loader.exec_module(led)
+# `led` has no .py extension, so load it by path. Typed as Any because the type checker can't
+# follow a module loaded this way; `led` itself is type-checked directly (/run-tests).
+p = str(pathlib.Path(__file__).parent.parent / "led")
+led: Any = types.ModuleType("led")
+importlib.machinery.SourceFileLoader("led", p).exec_module(led)
 
 SAMPLE = """0: EVGA GeForce RTX 3080 FTW3 Ultra LHR
   Type:           GPU
@@ -40,7 +43,8 @@ assert led.build(devs, "FFFFFF", "off", 100) == [
 # which devices are lit: power, per-device switch, night hold, monitors off
 GPU, CMD, AIO = (d["name"] for d in devs)
 cfg = dict(led.DEFAULTS, disabled=[CMD])
-names = lambda held, idle=False: [d["name"] for d in led.lit(cfg, {"held": held, "idle": idle}, devs)]
+def names(held: bool, idle: bool = False) -> list[str]:
+    return [d["name"] for d in led.lit(cfg, {"held": held, "idle": idle}, devs)]
 assert names(False) == [GPU, AIO]          # Commander switched off
 assert names(True) == []                   # night: everything dark
 assert names(False, idle=True) == []       # monitors off: everything dark
@@ -51,16 +55,16 @@ cfg["power"] = False
 assert names(False) == []                  # global off beats everything
 
 # device switch after "all off" lights just that device; normal toggles keep the others
-names = [GPU, CMD, AIO]
+every = {GPU, CMD, AIO}
 c, r = dict(led.DEFAULTS, power=False, disabled=[CMD]), {"held": False}
-led.switch_device(c, r, names, AIO, True)
+led.switch_device(c, r, every, AIO, True)
 assert c["power"] and set(c["disabled"]) == {GPU, CMD} and [d["name"] for d in led.lit(c, r, devs)] == [AIO]
-led.switch_device(c, r, names, GPU, True)
+led.switch_device(c, r, every, GPU, True)
 assert c["disabled"] == [CMD]                            # now just adds GPU back
-led.switch_device(c, r, names, GPU, False)
+led.switch_device(c, r, every, GPU, False)
 assert set(c["disabled"]) == {CMD, GPU}
 c, r = dict(led.DEFAULTS), {"held": True}                # night hold: switching on lifts it
-led.switch_device(c, r, names, GPU, True)
+led.switch_device(c, r, every, GPU, True)
 assert not r["held"] and [d["name"] for d in led.lit(c, r, devs)] == [GPU, CMD, AIO]
 
 # night window, wrapping midnight and not
@@ -93,9 +97,10 @@ with tempfile.TemporaryDirectory() as d:
     assert led.look(dict(led.DEFAULTS, color="theme")) == ("F38D70", "static")
 
 # motherboard (aura) devices: skipped by the OpenRGB builder, driven through led-aura by sync
-board = {"index": None, "name": "ASUS PRIME X299-A", "type": "Motherboard", "backend": "aura", "modes": []}
+board: dict[str, Any] = {"index": None, "name": "ASUS PRIME X299-A", "type": "Motherboard", "backend": "aura", "modes": []}
 assert led.build(devs[:1] + [board], "FF0000", "static", 100) == [["-d", "0", "-m", "Direct", "-c", "FF0000"]]
-sent, applied = [], []
+sent: list[tuple[str, str]] = []
+applied: list[list[str]] = []
 led.aura_set, real_apply = (lambda c, m: sent.append((c, m))), led.apply
 led.apply = lambda args: applied.append(args)
 cfg2 = dict(led.DEFAULTS, color="F38D70", brightness=50, gamma=2.8)
@@ -108,7 +113,7 @@ led.apply = real_apply
 
 # screens_off: dark only when every enabled monitor is DPMS-off; unknown -> never dark
 import subprocess as sp
-def fake_hyprctl(mons):
+def fake_hyprctl(mons: list[dict[str, Any]]) -> None:
     led.subprocess.run = lambda *a, **k: sp.CompletedProcess(a, 0, stdout=__import__("json").dumps(mons))
 real_run = led.subprocess.run
 fake_hyprctl([{"dpmsStatus": False}, {"dpmsStatus": False}, {"dpmsStatus": True, "disabled": True}])
@@ -122,8 +127,11 @@ assert not led.screens_off()
 led.subprocess.run = real_run
 
 # retry path: fake openrgb that demands 2 colours the first time
-calls = []
-led.openrgb = lambda *a: calls.append(list(a)) or ("Please provide between 2 and 2 colors" if len(calls) == 1 else "")
+calls: list[list[str]] = []
+def fake_openrgb(*a: str) -> str:
+    calls.append(list(a))
+    return "Please provide between 2 and 2 colors" if len(calls) == 1 else ""
+led.openrgb = fake_openrgb
 led.apply(["-d", "1", "-m", "Color Pulse", "-c", "FF0000"])
 assert calls[1][-1] == "FF0000,FF0000"
 calls.clear()  # rainbow fallback without a colour (H150i "Color Shift" wants 2)

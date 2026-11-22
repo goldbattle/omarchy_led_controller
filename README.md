@@ -1,81 +1,105 @@
-# LEDs (Omarchy bar widget)
+# omarchy_led_controller
 
-Bar widget + `led` CLI over the OpenRGB SDK server. Left-click the bulb opens the panel,
-right-click toggles off. All state lives in `~/.config/led.json`; every action (panel,
-right-click, terminal, night timer) goes through `led`, which makes the hardware match it.
+An [Omarchy](https://omarchy.org) bar widget that controls all the RGB lighting in your PC
+from one place: case strips, cooler, GPU, mouse and anything else
+[OpenRGB](https://openrgb.org) supports. Your lights can follow your desktop theme or the
+sun, go dark when your screens sleep or at bedtime, and stay in sync no matter whether you
+change them from the panel, the terminal or a schedule.
+
+## Features
+
+- Colour presets, including one that follows your Omarchy theme
+- Static, Breathe, Rainbow and **Flux**: white by day, warm at sunset, red at night
+- Brightness, plus an on/off switch for each device
+- Right-click the bulb to turn everything off or back on
+- Lights go dark while your screens are asleep
+- Optional night schedule, e.g. off from 22:00 to 09:00
+- A `led` command that does everything the panel does
+
+![The panel, normally and with Advanced open](preview.png)
+
+## Requirements
+
+- Omarchy 4 (Hyprland 0.56 or newer)
+- OpenRGB, with the `i2c-dev` module for GPU, RAM and motherboard lighting:
+
+  ```
+  sudo pacman -S openrgb
+  echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf && sudo modprobe i2c-dev
+  ```
+
+## Install
 
 ```
-./install.sh                               # test, copy into Omarchy, install services + hook, reload UI if it changed
-led state
-led set 8000FF -m breathing -b 60          # modes: static breathing rainbow flux
+omarchy plugin add git@github.com:goldbattle/omarchy_led_controller.git
+~/.config/omarchy/plugins/com.pgeneva.omarchy_led_controller/install.sh
+```
+
+`omarchy plugin add` only copies the files. `install.sh` does the rest: it puts `led` on your
+PATH, starts the OpenRGB server as a user service, and adds the timers that handle the night
+schedule, Flux and sleeping screens. Rerun it after updating.
+
+## Using it
+
+Left-click the bulb for the panel, right-click to toggle everything. The same from a terminal:
+
+```
+led state                                  # what's on, as JSON
+led set 8000FF -m breathing -b 60          # colour, effect (static breathing rainbow flux), brightness
 led set theme                              # follow the Omarchy theme colour
 led on | led off
-led device "Corsair Commander Pro" off     # per-device switch
+led device "Corsair Commander Pro" off     # one device
 led schedule '{"auto_off": true, "off": "22:00", "on": "09:00"}'
-led restart                                # restart OpenRGB (re-detect + re-apply)
+led restart                                # restart OpenRGB, re-detect devices
 ```
 
-- **Auto-off** darkens every device for the window; at the end only devices whose switch is on
-  come back. It acts only when the window starts/ends, so turning lights on mid-window sticks
-  until morning. Works with any mode.
-- **Theme** colour is `accent` from `~/.local/state/omarchy/current/theme/colors.toml`, the colour
-  the desktop shows. Not `keyboard.rgb`: some themes override it (tokyo-night: magenta vs blue accent).
-  A `theme-set` hook re-applies ~3s after a switch (it runs after Omarchy's own retint steps).
-- **Gamma**: colours are converted from screen (sRGB) to linear LED drive (`"gamma"` in
-  `~/.config/led.json`, or Advanced → Colour depth), otherwise pastels like theme accents show up near-white.
-  Default 2.8 (a bit deeper than textbook 2.2); `1.0` disables it.
-- **Off while screens are off** (Advanced, default on): `led watch` (`led-idle.service`) polls
-  `hyprctl monitors` every 2s and darkens everything once all monitors are DPMS-off, i.e. after
-  the screensaver/lock blanks them; lights return within ~2s of waking.
-- **Advanced** (bottom of the panel): custom hex and the auto-off times.
-- **Flux** follows the sun, not the clock: white (6500K) while it's >6 deg up, 3400K at sunset,
-  2700K, 1900K (candlelight) at civil dusk, then fading to pure red by nautical dusk (-12 deg);
-  mornings mirror it. The chip shows the current target. Location defaults to San Francisco;
-  change it in Advanced or with `led schedule '{"location": [lat, lon]}'`.
+Settings live in `~/.config/led.json`.
 
-## Files
-| File | Installed to |
-|---|---|
-| `manifest.json`, `Panel.qml`, `led` | `~/.config/omarchy/plugins/com.pgeneva.omarchy_led_controller/` (`led` also linked into `~/.local/bin`) |
-| `systemd/openrgb.service` | user unit: OpenRGB server, runs `led restore` at login |
-| `systemd/led-idle.service` | user unit (graphical session): `led watch` |
-| `systemd/led-schedule.{service,timer}` | user units: `led tick` every minute (auto-off, flux steps, theme drift) |
-| `hooks/led-theme-set` | `~/.config/omarchy/hooks/theme-set.d/` |
+A few things worth knowing:
 
-The plugin is *copied*, not symlinked: the shell's inotify watcher doesn't follow symlinks. Its
-hot-reload also keeps serving cached QML while bars hold the old component, so `install.sh`
-restarts the shell when `Panel.qml`/`manifest.json` changed (`led`-only changes need nothing).
+- **Flux** goes by the sun, not the clock, so set your location under Advanced (it starts in
+  San Francisco).
+- **Auto off** only acts when the night window starts and ends. If you turn the lights on in
+  the middle of the night, they stay on until morning.
+- **Colour depth** (Advanced) makes LEDs look closer to the colour you see on screen. Without
+  it, soft theme colours come out almost white. Lower it if colours look too dark.
 
-## Hardware (this machine)
-| Device | Bus | Status |
-|---|---|---|
-| EVGA RTX 3080 FTW3 Ultra LHR (3842:4897) | NVIDIA i2c, addr 0x2D | works |
-| Corsair Commander PRO (1b1c:0c10) | USB HID | works; LED strips, both headers sized to **32** LEDs (it can't sense what's attached). At 204 Direct/Static still worked but every hardware effect (Breathe/Rainbow) rendered dark. If the last LEDs stay dark raise it (strips are 10 LEDs each): `openrgb -d "Corsair Commander Pro" -z 0 -sz N -z 1 -sz N && led restart` (without the restart the server ignores later mode changes on it) |
-| Corsair H150i Platinum (1b1c:0c12) | USB HID | works (OpenRGB calls it "H150i PRO RGB") |
-| Logitech G502 Proteus Spectrum | USB HID | works |
-| ASUS PRIME X299-A Aura (ENE `AUMA0-E6K5-0104`, 7 LEDs) | Nuvoton NCT6796D Super I/O SMBus (base 0x2c0), addr 0x4E | works via `led-aura` (not OpenRGB: Linux has no driver for that SMBus) |
+## Troubleshooting
 
-## Motherboard backend (`led-aura`)
-OpenRGB only finds Aura on the chipset SMBus; on this board it sits behind the Super I/O's own
-SMBus, which needs the out-of-tree `i2c-nct6775` kernel module. Instead `led-aura` is a
-stdlib-Python port of that driver (via `/dev/port`) plus OpenRGB's ENE register protocol and
-detection test, so nothing needs rebuilding on kernel updates. It only touches RAM registers
-(never the controller's flash), so a power cycle restores BIOS lighting. Raw port I/O needs root:
-```
-sudo ./install-aura.sh   # once, and again when led-aura changes (install.sh reminds you)
-```
-installs it root-owned at `/usr/local/libexec/led-aura` with a sudo rule for just that helper.
-`led` then shows the board as a fifth device (probe cached per boot in `/run/user/$UID`).
+- **The panel says "led failed"**: check the server with `systemctl --user status openrgb`.
+- **OpenRGB takes a minute or more to find devices**: if you have a Logitech wireless
+  receiver, OpenRGB's `Logitech HID++ 2.0` detector can stall on it
+  ([OpenRGB#5918](https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/5918)). Turn that
+  detector off in OpenRGB's settings, or in `~/.config/OpenRGB/OpenRGB.json`, then run
+  `led restart`.
+- **A device is missing**: run `led restart`. If it still doesn't show up, check whether
+  `openrgb --list-devices` sees it; if not, it's an OpenRGB issue.
 
-## One-time system setup (not in install.sh, needs root)
-```
-sudo pacman -S openrgb                       # ships udev rules (uaccess for hidraw + i2c)
-echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf && sudo modprobe i2c-dev
-```
-Then in `~/.config/OpenRGB/OpenRGB.json` set `Detectors.detectors["Logitech HID++ 2.0"] = false`:
-that detector loops on the Unifying receiver and stalls detection ~90s (0.8s without it).
+## Development
 
-## OpenRGB CLI gotchas `led` works around
-- Exit code is 0 even on errors, so output text is checked.
-- Some modes need exactly N colours ("Color Pulse", "Pulsing" = 2): `led` reads the error and repeats the colour.
-- Direct mode on Corsair needs a keepalive, which is why the server must stay running.
+Work in a clone anywhere and run `./install.sh`. It runs the tests in `tests/`, copies the
+plugin into Omarchy, and restarts the shell if the UI changed. In Claude Code, `/run-tests`
+runs the tests plus type checks, and `/update-screenshot` retakes `preview.png`.
+
+## Tested hardware
+
+Anything OpenRGB detects should work. These devices have been tried. "Works" means colour,
+every effect, brightness and the on/off switch all behave.
+
+| Device | Type | Connection | Status | Notes |
+|---|---|---|---|---|
+| EVGA RTX 3080 FTW3 Ultra LHR (3842:4897) | GPU | NVIDIA i2c | Works | |
+| Corsair Commander PRO (1b1c:0c10) | LED strips | USB | Works | [Set the strip length](docs/corsair-commander-pro.md) |
+| Corsair H150i Platinum (1b1c:0c12) | Cooler | USB | Works | OpenRGB names it "H150i PRO RGB" |
+| Logitech G502 Proteus Spectrum (046d:c332) | Mouse | USB | Works | |
+| ASUS PRIME X299-A | Motherboard | SMBus (Super I/O) | Works with an extra | [Needs the asus-aura extra](docs/asus-aura.md) |
+
+The [extras](extras/) folder holds optional add-ons for hardware OpenRGB can't reach yet.
+**You don't need it** unless a row above links you there.
+
+**Add your hardware.** Open [Claude Code](https://claude.com/claude-code) in this repo and
+run `/add-tested-hardware`. It finds your devices, walks you through a quick test of each
+one (you watch the lights and say what happened), puts your settings back afterwards, and
+adds the results to this table. No serial numbers or other details about your machine are
+recorded. Then open a pull request. You can also test by hand with the `led` commands above
+and add a row yourself.

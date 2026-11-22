@@ -1,7 +1,8 @@
 #!/bin/bash
 # One-time root setup for the motherboard (ASUS Aura) backend: install the led-aura helper
 # root-owned (so it can't be edited into something else) and let this user run exactly that
-# helper without a password. Rerun after led-aura changes; ./install.sh tells you when.
+# helper without a password. Optional: only for boards OpenRGB cannot reach (see
+# extras/README.md). Rerun after led-aura changes; the main install.sh reminds you.
 set -euo pipefail
 [[ $EUID == 0 ]] || exec sudo "$0" "$@"
 user=${SUDO_USER:-$(id -un "${PKEXEC_UID:?run with sudo or pkexec}")}

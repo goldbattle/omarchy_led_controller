@@ -16,18 +16,55 @@ same per-device switches. Commands print the resulting state as JSON.
   led restore                     run at login by openrgb.service
 """
 import argparse, json, math, os, re, shlex, subprocess, sys, time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, NoReturn, NotRequired, TypedDict, TypeVar, cast
+
+
+class Config(TypedDict):
+    """~/.config/led.json: everything the user chose."""
+    color: str           # "RRGGBB", or "theme" to follow the Omarchy theme accent
+    mode: str            # "static", "breathing", "rainbow" or "flux"
+    brightness: int      # 0-100
+    power: bool          # False after `led off`
+    disabled: list[str]  # names of devices whose own switch is off
+    auto_off: bool       # night schedule on?
+    off: str             # "HH:MM" the night window starts
+    on: str              # "HH:MM" it ends
+    idle_off: bool       # dark while every monitor is asleep
+    gamma: float         # screen -> LED colour depth, 1.0-4.0
+    location: list[float]  # [lat, lon] for flux
+
+
+class Runtime(TypedDict):
+    """Per-boot state in $XDG_RUNTIME_DIR, so a reboot forgets it."""
+    window: bool | None  # inside the night window at the last tick (None: never checked)
+    held: bool           # the schedule is holding the lights off
+    idle: bool           # all monitors are off (set by `led watch`)
+    shown: NotRequired[str]  # colour last sent to the hardware
+
+
+class Device(TypedDict):
+    """One controllable device, from `openrgb -ld` or the led-aura helper."""
+    index: int | None    # OpenRGB device index (None for led-aura)
+    name: str
+    type: str
+    modes: list[str]     # mode names exactly as the device calls them
+    backend: NotRequired[str]  # "aura" for the led-aura helper; absent for OpenRGB
+
+
+T = TypeVar("T", bound=Mapping[str, Any])
 
 # Each device names its modes differently; first match wins.
-MODES = {
+MODES: dict[str, list[str]] = {
     "static":    ["Direct", "Static"],
     "breathing": ["Breathing", "Color Pulse", "Pulsing"],
     "rainbow":   ["Spectrum Cycle", "Rainbow Wave", "Rainbow", "Color Shift"],
     "off":       ["Off"],
 }
 CONFIG = Path.home() / ".config/led.json"
-DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": True,
+DEFAULTS: Config = {"color": "8000FF", "mode": "static", "brightness": 100, "power": True,
             "disabled": [],        # per-device switch off
             "auto_off": False, "off": "22:00", "on": "09:00",
             "idle_off": True,      # all LEDs off while every monitor is DPMS-off (screensaver -> black)
@@ -35,21 +72,21 @@ DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": Tru
             "location": [37.77, -122.42]}  # flux follows the sun here (default San Francisco)
 # flux: sun elevation (degrees) -> colour temperature (K). Day white, sunset warm,
 # dusk candlelight, then fading to pure red ("darkroom") by nautical dusk.
-FLUX = [(6, 6500), (0, 3400), (-3, 2700), (-6, 1900)]
+FLUX: list[tuple[float, float]] = [(6, 6500), (0, 3400), (-3, 2700), (-6, 1900)]
 DARKROOM = -12
 # {"window": last seen in-window bool, "held": schedule is holding lights off,
 #  "idle": monitors are off (set by `led watch`)}.
 # In /run so a reboot forgets it and the next tick re-evaluates.
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "led-schedule.json"
-RT_DEFAULT = {"window": None, "held": False, "idle": False}
+RT_DEFAULT: Runtime = {"window": None, "held": False, "idle": False}
 THEME = Path.home() / ".local/state/omarchy/current/theme"
-# Motherboard (ASUS Aura) backend: a root helper next to OpenRGB, installed by install-aura.sh.
+# Optional motherboard (ASUS Aura) backend from extras/asus-aura/. Skipped when not installed.
 AURA = "/usr/local/libexec/led-aura"
 AURA_CACHE = RUNTIME.with_name("led-aura.json")  # probe result, once per boot
 HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 
-def openrgb(*args):
+def openrgb(*args: str) -> str:
     r = subprocess.run(["openrgb", *args], capture_output=True, text=True, timeout=20)
     return r.stdout + r.stderr  # exit code is 0 even on errors; callers check the text
 
@@ -57,7 +94,7 @@ def openrgb(*args):
 RAINBOWISH = ["FF0000", "0000FF", "00FF00"]  # for "rainbow" on devices that can only shift between N colours
 
 
-def apply(args):
+def apply(args: list[str]) -> None:
     out = openrgb(*args)
     if m := re.search(r"between (\d+) and", out):
         # some modes want N colours: repeat ours (Commander "Color Pulse" = 2), or for
@@ -73,8 +110,8 @@ def apply(args):
         sys.exit(out.strip())
 
 
-def parse(text):
-    devs = []
+def parse(text: str) -> list[Device]:
+    devs: list[Device] = []
     for line in text.splitlines():
         if m := re.match(r"^(\d+): (.+)$", line):
             devs.append({"index": int(m[1]), "name": m[2].strip(), "type": "", "modes": []})
@@ -86,21 +123,22 @@ def parse(text):
     return devs
 
 
-def pick(dev, intent):
+def pick(dev: Device, intent: str) -> str | None:
     return next((m for m in MODES[intent] if m in dev["modes"]), None)
 
 
-def adjust(color, brightness, gamma=1.0):
+def adjust(color: str, brightness: int, gamma: float = 1.0) -> str:
     # Hex colours are screen (gamma-encoded) values but LED PWM is linear: without this, pastels
     # like a theme accent wash out to near-white. Pure colours (FF0000, ...) are unaffected.
     return "".join(f"{round((int(color[i:i + 2], 16) / 255) ** gamma * 255 * brightness / 100):02X}"
                    for i in (0, 2, 4))
 
 
-def build(devs, color, intent, brightness, gamma=1.0):
+def build(devs: list[Device], color: str, intent: str, brightness: int,
+          gamma: float = 1.0) -> list[list[str]]:
     """OpenRGB CLI calls for `devs` (motherboard/aura devices are handled by sync)."""
     hexc = adjust(color, brightness, gamma)
-    calls = []
+    calls: list[list[str]] = []
     for d in devs:
         if d.get("backend") == "aura":
             continue
@@ -116,14 +154,14 @@ def build(devs, color, intent, brightness, gamma=1.0):
     return calls
 
 
-def in_window(now, off, on):
+def in_window(now: str, off: str, on: str) -> bool:
     """now/off/on are "HH:MM"; the window may wrap past midnight."""
     if off == on:
         return False
     return off <= now < on if off < on else now >= off or now < on
 
 
-def sun_elevation(t, lat, lon):
+def sun_elevation(t: datetime, lat: float, lon: float) -> float:
     """Degrees above the horizon at UTC datetime `t` (USNO low-precision formulas, ~0.1 deg)."""
     d = (t - datetime(2000, 1, 1, 12, tzinfo=timezone.utc)).total_seconds() / 86400
     g = math.radians(357.529 + 0.98560028 * d)
@@ -137,18 +175,19 @@ def sun_elevation(t, lat, lon):
     return math.degrees(math.asin(math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(ha)))
 
 
-def kelvin(k):
+def kelvin(k: float) -> list[int]:
     """Colour temperature -> sRGB (Tanner Helland's fit, good for 1000-40000K)."""
     t = k / 100
-    r = 255 if t <= 66 else 329.698727446 * (t - 60) ** -0.1332047592
+    r: float = 255 if t <= 66 else 329.698727446 * (t - 60) ** -0.1332047592
     g = 99.4708025861 * math.log(t) - 161.1195681661 if t <= 66 else 288.1221695283 * (t - 60) ** -0.0755148492
-    b = 255 if t >= 66 else 0 if t <= 19 else 138.5177312231 * math.log(t - 10) - 305.0447927307
+    b: float = 255 if t >= 66 else 0 if t <= 19 else 138.5177312231 * math.log(t - 10) - 305.0447927307
     return [max(0, min(255, round(c))) for c in (r, g, b)]
 
 
-def flux(el):
+def flux(el: float) -> tuple[str, str]:
     """(RRGGBB, label) for sun elevation `el`: the FLUX curve, then a fade to pure red."""
     pts = FLUX
+    k: float
     if el >= pts[0][0]:
         k = pts[0][1]
     elif el <= pts[-1][0]:
@@ -164,12 +203,12 @@ def flux(el):
     return "".join(f"{c:02X}" for c in rgb), f"{round(k, -2):.0f}K"
 
 
-def flux_now(cfg):
+def flux_now(cfg: Config) -> tuple[str, str]:
     lat, lon = cfg["location"] or DEFAULTS["location"]  # `or`: older configs stored null
     return flux(sun_elevation(datetime.now(timezone.utc), lat, lon))
 
 
-def theme_color():
+def theme_color() -> str:
     """The theme accent: the colour the panel swatch and the desktop show. (Not keyboard.rgb:
     some themes override that, e.g. tokyo-night is magenta there but blue everywhere else.)"""
     try:
@@ -180,31 +219,31 @@ def theme_color():
     return "FFFFFF"
 
 
-def look(cfg):
+def look(cfg: Config) -> tuple[str, str]:
     """(colour, mode) to show right now."""
     if cfg["mode"] == "flux":
         return flux_now(cfg)[0], "static"
     return theme_color() if cfg["color"] == "theme" else cfg["color"], cfg["mode"]
 
 
-def lit(cfg, rt, devs):
+def lit(cfg: Config, rt: Runtime, devs: list[Device]) -> list[Device]:
     """The one rule for which devices should be on: night/idle darken all, switches gate the rest."""
     if not cfg["power"] or rt["held"] or (rt.get("idle") and cfg["idle_off"]):
         return []
     return [d for d in devs if d["name"] not in cfg["disabled"]]
 
 
-def screens_off():
+def screens_off() -> bool:
     """True when every enabled monitor is DPMS-off (Omarchy blanks them after the lock screen)."""
     try:
         r = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True, timeout=5)
-        mons = [m for m in json.loads(r.stdout) if not m.get("disabled")]
+        mons: list[dict[str, Any]] = [m for m in json.loads(r.stdout) if not m.get("disabled")]
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False  # can't tell: never darken on a guess
     return bool(mons) and not any(m.get("dpmsStatus", True) for m in mons)
 
 
-def watch():
+def watch() -> NoReturn:
     # ponytail: polls every 2s (hyprctl ~7ms); Hyprland has no DPMS event on socket2 to subscribe to.
     while True:
         off = screens_off()
@@ -219,24 +258,25 @@ def watch():
         time.sleep(2)
 
 
-def load(path, default):
+def load(path: Path, default: T) -> T:
+    """`default` with whatever the file at `path` overrides (all of `default` if it's unreadable)."""
     try:
-        return {**default, **json.loads(path.read_text())}
+        return cast(T, {**default, **json.loads(path.read_text())})
     except (FileNotFoundError, ValueError):
-        return dict(default)
+        return cast(T, dict(default))
 
 
-def save(path, data):
+def save(path: Path, data: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def aura_device():
+def aura_device() -> Device | None:
     """The motherboard through led-aura, if installed and present. Probed once per boot."""
+    if not os.path.exists(AURA):  # checked before the cache, so uninstalling takes effect at once
+        return None
     try:
-        info = json.loads(AURA_CACHE.read_text())
+        info: dict[str, Any] = json.loads(AURA_CACHE.read_text())
     except (OSError, ValueError):
-        if not os.path.exists(AURA):
-            return None
         r = subprocess.run(["sudo", "-n", AURA, "probe"], capture_output=True, text=True, timeout=20)
         try:
             info = json.loads(r.stdout)
@@ -253,34 +293,36 @@ def aura_device():
             "modes": ["Off", "Static", "Breathing", "Spectrum Cycle"]}
 
 
-def aura_set(color, mode):
+def aura_set(color: str, mode: str) -> None:
     r = subprocess.run(["sudo", "-n", AURA, "set", color, mode], capture_output=True, text=True, timeout=20)
     if r.returncode:
         sys.exit(f"led-aura: {(r.stderr or r.stdout).strip()}")
 
 
-def devices():
+def devices() -> list[Device]:
     devs = parse(openrgb("-ld"))
     return devs + [a] if (a := aura_device()) else devs
 
 
-def sync(cfg, rt, devs):
+def sync(cfg: Config, rt: Runtime, devs: list[Device]) -> None:
     on = lit(cfg, rt, devs)
     off = [d for d in devs if d not in on]
     color, mode = look(cfg)
     for args in build(on, color, mode, cfg["brightness"], cfg["gamma"]) + build(off, "000000", "off", 100):
         apply(args)
     for d in devs:
-        if d.get("backend") == "aura":
-            aura_set(adjust(color, cfg["brightness"], cfg["gamma"]), mode) if d in on else aura_set("000000", "off")
+        if d.get("backend") == "aura" and d in on:
+            aura_set(adjust(color, cfg["brightness"], cfg["gamma"]), mode)
+        elif d.get("backend") == "aura":
+            aura_set("000000", "off")
     rt["shown"] = color
 
 
-def toggle(lst, name, include):
+def toggle(lst: list[str], name: str, include: bool) -> list[str]:
     return sorted(set(lst) | {name}) if include else [n for n in lst if n != name]
 
 
-def switch_device(cfg, rt, names, name, on):
+def switch_device(cfg: Config, rt: Runtime, names: set[str], name: str, on: bool) -> None:
     """Per-device switch. While everything is dark it still has to do something visible:
     after "all off", switching one device on lights just that one; at night it lifts the hold."""
     if on and not cfg["power"]:
@@ -292,13 +334,22 @@ def switch_device(cfg, rt, names, name, on):
         rt["held"] = False  # a manual change overrides the night window until morning, like `set`
 
 
-def main():
+def hex_color(c: str) -> str:
+    """argparse type for `led set`: "theme", or RRGGBB with an optional "#"."""
+    if c == "theme":
+        return c
+    if m := re.fullmatch(r"#?([0-9a-fA-F]{6})", c):
+        return m[1].upper()
+    raise ValueError(c)
+
+
+def main() -> None:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
     for name in ("state", "on", "off", "tick", "restore", "restart", "watch"):
         sub.add_parser(name)
     s = sub.add_parser("set")
-    s.add_argument("color", nargs="?", type=lambda c: "theme" if c == "theme" else re.fullmatch(r"#?([0-9a-fA-F]{6})", c)[1].upper())
+    s.add_argument("color", nargs="?", type=hex_color)
     s.add_argument("-m", "--mode", choices=["static", "breathing", "rainbow", "flux"])
     s.add_argument("-b", "--brightness", type=int, choices=range(0, 101), metavar="0-100")
     s.add_argument("-g", "--gamma", type=float, metavar="1.0-4.0", help="colour depth")
@@ -316,7 +367,7 @@ def main():
 
     if a.cmd == "watch":
         watch()
-    cfg = {k: v for k, v in load(CONFIG, DEFAULTS).items() if k in DEFAULTS}
+    cfg = cast(Config, {k: v for k, v in load(CONFIG, DEFAULTS).items() if k in DEFAULTS})
     if cfg["mode"] == "daylight":  # renamed
         cfg["mode"] = "flux"
     rt = load(RUNTIME, RT_DEFAULT)
@@ -326,7 +377,7 @@ def main():
         sys.exit(f"unknown device {a.name!r}; have: {sorted(names)}")
 
     if a.cmd == "set":
-        cfg.update(color=a.color or cfg["color"], mode=a.mode or cfg["mode"], power=True)
+        cfg["color"], cfg["mode"], cfg["power"] = a.color or cfg["color"], a.mode or cfg["mode"], True
         cfg["brightness"] = cfg["brightness"] if a.brightness is None else a.brightness
         if a.gamma is not None:
             if not 1.0 <= a.gamma <= 4.0:
@@ -346,7 +397,8 @@ def main():
             loc = new.get("location", cfg["location"])
             ok = (isinstance(new, dict) and isinstance(new.get("auto_off", cfg["auto_off"]), bool)
                   and isinstance(new.get("idle_off", cfg["idle_off"]), bool)
-                  and all(HHMM.fullmatch(str(new.get(k, cfg[k]))) for k in ("off", "on"))
+                  and HHMM.fullmatch(str(new.get("off", cfg["off"])))
+                  and HHMM.fullmatch(str(new.get("on", cfg["on"])))
                   and isinstance(loc, list) and len(loc) == 2
                   and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in loc)
                   and -90 <= loc[0] <= 90 and -180 <= loc[1] <= 180)
@@ -355,13 +407,14 @@ def main():
         if not ok:
             sys.exit('expected {"auto_off": bool, "off": "HH:MM", "on": "HH:MM", '
                      '"idle_off": bool, "location": [lat, lon]} (all keys optional)')
-        cfg.update({k: new[k] for k in ("auto_off", "off", "on", "idle_off", "location") if k in new})
+        cfg.update(cast(Config, {k: new[k] for k in ("auto_off", "off", "on", "idle_off", "location")
+                                 if k in new}))
 
     if a.cmd in ("tick", "schedule", "restore"):
-        window = cfg["auto_off"] and in_window(time.strftime("%H:%M"), cfg["off"], cfg["on"])
+        window: bool = cfg["auto_off"] and in_window(time.strftime("%H:%M"), cfg["off"], cfg["on"])
         changed = window != rt["window"]  # act on transitions only, so manual changes stick
         if changed or a.cmd == "restore":
-            rt.update(window=window, held=window)
+            rt["window"], rt["held"] = window, window
         drifted = look(cfg)[0] != rt.get("shown")  # flux step or theme change
         if a.cmd == "tick" and not changed and not drifted:
             return

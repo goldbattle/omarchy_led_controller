@@ -17,7 +17,8 @@
 // Layout of the popup, top to bottom
 // ----------------------------------
 //   1. Header       big bulb icon plus a one-line status ("5 devices · static")
-//   2. Colour       a row of preset swatches, the first one follows your theme
+//   2. Colour       a row of fixed colours, then a row with the current theme's
+//                   colours (the first one, with the Omarchy logo, is "theme")
 //   3. Effect       Static / Breathe / Rainbow / Flux
 //   4. Brightness   a slider
 //   5. Devices      one on/off switch per detected device
@@ -75,7 +76,8 @@ Panel {
   // `led` also sends a few extras that are read below when present:
   //   shown (the colour actually on the LEDs right now), flux (the current Flux
   //   step, e.g. "3400K"), theme (the Omarchy theme's name, e.g. "tokyo-night"),
-  //   theme_color (the RRGGBB that "theme" stands for right now),
+  //   theme_color (the RRGGBB that "theme" stands for right now), palette (the
+  //   theme's own colours by slot name, e.g. { magenta: "907AA9" }),
   //   color_name (a rough name for the colour, e.g. "purple"), gamma, idle_off
   //   and location.
   property var st: ({ color: "8000FF", mode: "static", brightness: 100, power: true, held: false,
@@ -102,10 +104,37 @@ Panel {
   // A valid 24-hour time such as "07:30" or "22:00".
   readonly property string timeRe: "^([01]\\d|2[0-3]):[0-5]\\d$"
 
-  // The colour presets. "theme" follows the accent colour of the current
-  // Omarchy theme; the others are fixed hex colours.
-  readonly property var swatches: ["theme", "FFFFFF", "FF0000", "FF6000", "FFC000",
-                                   "00FF00", "00FFFF", "0000FF", "8000FF", "FF00A0"]
+  // The fixed colour presets (the theme's colours get a row of their own).
+  readonly property var swatches: ["FFFFFF", "FF0000", "FF6000", "FFC000", "00FF00",
+                                   "00FFFF", "0000FF", "8000FF", "FF00A0"]
+
+  // One round colour button. `value` is what `led set` gets ("FF0000", "theme",
+  // "theme:magenta"), `hex` is the colour to draw. The chosen one gets a thick
+  // ring; none is chosen in Flux, because the sun picks the colour then. `logo`
+  // puts the Omarchy logo (the bar's menu glyph) on it, for "follow the theme".
+  component Swatch: Rectangle {
+    property string value
+    property string hex
+    property bool logo: false
+    readonly property bool picked: root.st.mode !== "flux" && root.st.color === value
+    width: Style.space(26); height: width; radius: width / 2
+    color: "#" + hex
+    border.width: picked ? 3 : 1
+    border.color: picked ? root.foreground : root.dim
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: root.setColor(parent.value)
+    }
+    Text {
+      visible: parent.logo
+      anchors.centerIn: parent
+      text: "\ue900"
+      color: Color.background
+      font.family: "omarchy"
+      font.pixelSize: Style.font.caption
+    }
+  }
 
   // Shared look for the panel's text, so every label matches the bar.
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -163,6 +192,8 @@ Panel {
     if (st.mode === "flux") return "flux" + (st.flux ? " · " + st.flux : "")
     if (st.mode === "rainbow") return "rainbow"
     if (st.color === "theme") return st.mode + " · " + (st.theme || "theme")
+    if (st.color.indexOf("theme:") === 0)  // a palette slot, e.g. "rose-pine magenta"
+      return st.mode + " · " + (st.theme || "theme") + " " + st.color.slice(6)
     return st.mode + (st.color_name ? " · " + st.color_name : "")
   }
 
@@ -258,7 +289,7 @@ Panel {
           }
         }
 
-        // --- 2. Colour presets --------------------------------------------------
+        // --- 2. Colour: fixed presets, then the current theme's colours --------
         PanelSectionHeader { text: "Colour"; foreground: root.foreground; fontFamily: root.fontFamily }
 
         Flow {
@@ -266,34 +297,38 @@ Panel {
           spacing: Style.space(8)
           Repeater {
             model: root.swatches
-            // One round swatch. The selected one gets a thick ring (no swatch
-            // is selected in Flux, because the sun picks the colour then).
-            Rectangle {
+            Swatch { required property string modelData; value: modelData; hex: modelData }
+          }
+        }
+
+        // First "theme" itself (what `led` picks for this theme, marked with the
+        // Omarchy logo), then each palette slot whose colour isn't already shown.
+        // A slot follows itself through theme changes: "magenta" is rose-pine's
+        // purple now and tokyo-night's magenta after a switch.
+        PanelSectionHeader {
+          text: "Theme colours" + (root.st.theme ? " · " + root.st.theme : "")
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+
+        Flow {
+          width: parent.width
+          spacing: Style.space(8)
+          Repeater {
+            model: {
+              var palette = root.st.palette || {}
+              var seen = {}, values = ["theme"]
+              seen[root.st.theme_color] = true
+              for (var slot in palette)
+                if (!seen[palette[slot]]) { seen[palette[slot]] = true; values.push("theme:" + slot) }
+              return values
+            }
+            Swatch {
               required property string modelData
-              readonly property bool picked: root.st.mode !== "flux" && root.st.color === modelData
-              width: Style.space(26); height: width; radius: width / 2
-              // The theme swatch shows the colour the LEDs get for "theme" (see
-              // theme_color in `led`), which isn't always the desktop accent.
-              color: modelData === "theme" ? (root.st.theme_color ? "#" + root.st.theme_color : Color.accent)
-                                           : "#" + modelData
-              border.width: picked ? 3 : 1
-              border.color: picked ? root.foreground : root.dim
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.setColor(parent.modelData)
-              }
-              // The "theme" swatch carries the Omarchy logo (the same glyph as the
-              // bar's menu button) so it reads as "follow the theme" rather than
-              // just another colour.
-              Text {
-                visible: parent.modelData === "theme"
-                anchors.centerIn: parent
-                text: "\ue900"
-                color: Color.background
-                font.family: "omarchy"
-                font.pixelSize: Style.font.caption
-              }
+              value: modelData
+              hex: modelData === "theme" ? (root.st.theme_color || "FFFFFF")
+                                         : (root.st.palette || {})[modelData.slice(6)] || "FFFFFF"
+              logo: modelData === "theme"
             }
           }
         }
@@ -384,7 +419,7 @@ Panel {
           TextField {
             width: parent.width
             placeholderText: "Hex, e.g. 8000FF"
-            text: root.st.color === "theme" ? "" : root.st.color
+            text: /^[0-9A-F]{6}$/.test(root.st.color) ? root.st.color : ""  // not "theme" / "theme:..."
             foreground: root.foreground
             onAccepted: {
               var m = String(text).match(/^#?([0-9a-fA-F]{6})$/)

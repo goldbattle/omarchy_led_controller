@@ -6,7 +6,7 @@ hardware match, so the panel, right-click, terminal and the night timer all obey
 same per-device switches. Commands print the resulting state as JSON.
 
   led state
-  led set [RRGGBB|theme] [-m static|breathing|rainbow|flux] [-b 0-100] [-g 1.0-4.0]
+  led set [RRGGBB|theme|theme:SLOT] [-m static|breathing|rainbow|flux] [-b 0-100] [-g 1.0-4.0]
   led on | led off                every device on / everything off
   led device NAME on|off          per-device power switch
   led schedule '{"auto_off": true, "off": "22:00", "on": "09:00", "location": [lat, lon]}'
@@ -262,27 +262,39 @@ def flux_now(cfg: Config) -> tuple[str, str]:
     return flux(sun_elevation(datetime.now(timezone.utc), lat, lon))
 
 
+# Theme palette slots offered in the panel's second row (colors.toml names). Picking one stores
+# "theme:<slot>", so it follows that slot through theme changes. Brown is left out: it shows as
+# a dim orange on LEDs.
+THEME_SLOTS = ("accent", "red", "orange", "yellow", "green", "cyan", "blue", "magenta")
+
+
+def theme_palette() -> dict[str, str]:
+    """Every `name = "#RRGGBB"` in the theme's colors.toml, e.g. {"accent": "56949F", ...}."""
+    try:
+        text = (THEME / "colors.toml").read_text()
+    except OSError:
+        return {}
+    return {k: v.upper() for k, v in re.findall(r'^(\w+)\s*=\s*"#([0-9a-fA-F]{6})"', text, re.M)}
+
+
 def theme_color() -> str:
     """The colour "theme" means. Usually the theme's accent. But a theme can give the browser
     its own tint in chromium.theme ("R,G,B"; Omarchy fills it with the background otherwise),
     and that hand-picked tint is the theme's signature colour: rose-pine's accent is teal while
-    its browser is lavender. So a chromium.theme that differs from the background wins.
-    (Not keyboard.rgb: some themes override that oddly, e.g. tokyo-night is magenta there.)"""
-    try:
-        colors = (THEME / "colors.toml").read_text()
-    except OSError:
-        return "FFFFFF"
-    def hex_of(key: str) -> str | None:
-        m = re.search(rf'^{key}\s*=\s*"#([0-9a-fA-F]{{6}})"', colors, re.M)
-        return m[1].upper() if m else None
+    its browser is lavender. So a chromium.theme that differs from the background wins, as long
+    as it's bright enough to be an LED colour: dark themes that set one (retro-82, lumon,
+    last-horizon) just pick another near-black background shade (brightest channel < 0.2,
+    vs 0.86+ for rose-pine and flexoki-light). (Not keyboard.rgb: some themes override that
+    oddly, e.g. tokyo-night is magenta there.)"""
+    palette = theme_palette()
     try:
         rgb = [int(v) for v in (THEME / "chromium.theme").read_text().split(",")]
         tint = "".join(f"{v:02X}" for v in rgb) if len(rgb) == 3 else None
     except (OSError, ValueError):
         tint = None
-    if tint and tint != hex_of("background"):
+    if tint and tint != palette.get("background") and max(rgb) >= 128:
         return tint
-    return hex_of("accent") or "FFFFFF"
+    return palette.get("accent", "FFFFFF")
 
 
 def color_name(color: str) -> str:
@@ -311,7 +323,12 @@ def look(cfg: Config) -> tuple[str, str]:
     """(colour, mode) to show right now."""
     if cfg["mode"] == "flux":
         return flux_now(cfg)[0], "static"
-    return theme_color() if cfg["color"] == "theme" else cfg["color"], cfg["mode"]
+    color = cfg["color"]
+    if color == "theme":
+        color = theme_color()
+    elif color.startswith("theme:"):  # a palette slot; a theme without it falls back to "theme"
+        color = theme_palette().get(color.removeprefix("theme:")) or theme_color()
+    return color, cfg["mode"]
 
 
 def lit(cfg: Config, rt: Runtime, devs: list[Device]) -> list[Device]:
@@ -461,8 +478,9 @@ def switch_device(cfg: Config, rt: Runtime, names: set[str], name: str, on: bool
 
 
 def hex_color(c: str) -> str:
-    """argparse type for `led set`: "theme", or RRGGBB with an optional "#"."""
-    if c == "theme":
+    """argparse type for `led set`: "theme", "theme:<slot>" (see THEME_SLOTS), or RRGGBB with an
+    optional "#"."""
+    if c == "theme" or c.removeprefix("theme:") in THEME_SLOTS:
         return c
     if m := re.fullmatch(r"#?([0-9a-fA-F]{6})", c):
         return m[1].upper()
@@ -557,6 +575,7 @@ def main() -> None:
     if a.cmd != "tick":
         print(json.dumps({**cfg, "held": rt["held"], "shown": look(cfg)[0], "flux": flux_now(cfg)[1],
                           "theme": theme_name(), "theme_color": theme_color(),
+                          "palette": {k: p[k] for p in [theme_palette()] for k in THEME_SLOTS if k in p},
                           "color_name": color_name(look(cfg)[0]),
                           "devices": devs}))
 

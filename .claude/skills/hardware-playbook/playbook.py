@@ -104,6 +104,7 @@ def steps(devices: list[str]) -> list[tuple[str, Callable[[], State]]]:
         ("rainbow -> static, back to back", lambda: (run("set", "-m", "rainbow"), run("set", "-m", "static"))[1]),
         ("breathing -> rainbow -> breathing", lambda: (run("set", "-m", "rainbow"), run("set", "-m", "breathing"))[1]),
         ("theme colour", lambda: run("set", "theme", "-m", "static")),
+        ("theme palette slot", lambda: expect(run("set", "theme:red"), color="theme:red")),
         ("flux", lambda: run("set", "-m", "flux")),
         ("colour picked in flux switches to static",
          lambda: (run("set", "-m", "flux"), expect(run("set", "00FF00"), mode="static", color="00FF00"))[1]),

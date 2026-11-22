@@ -8,7 +8,8 @@ change them from the panel, the terminal or a schedule.
 
 ## Features
 
-- Colour presets, including one that follows your Omarchy theme
+- Colour presets, plus a row with the current Omarchy theme's own colours that follows you
+  when you switch themes
 - Static, Breathe, Rainbow and **Flux**: white by day, warm at sunset, red at night
 - Brightness, plus an on/off switch for each device
 - Right-click the bulb to turn everything off or back on
@@ -47,6 +48,7 @@ Left-click the bulb for the panel, right-click to toggle everything. The same fr
 led state                                  # what's on, as JSON
 led set 8000FF -m breathing -b 60          # colour, effect (static breathing rainbow flux), brightness
 led set theme                              # follow the Omarchy theme colour
+led set theme:magenta                      # or one of its palette colours
 led on | led off
 led device "Corsair Commander Pro" off     # one device
 led schedule '{"auto_off": true, "off": "22:00", "on": "09:00"}'

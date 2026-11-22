@@ -113,8 +113,21 @@ with tempfile.TemporaryDirectory() as d:
     assert led.theme_color() == "56949F"
     (led.THEME / "chromium.theme").write_text("210,196,219\n")       # rose-pine lavender
     assert led.theme_color() == "D2C4DB"
+    (led.THEME / "chromium.theme").write_text("0,23,46\n")           # retro-82: dark shade, not a tint
+    assert led.theme_color() == "56949F"
     (led.THEME / "chromium.theme").write_text("garbage\n")
     assert led.theme_color() == "56949F"
+    # palette slots: "theme:magenta" follows that slot; a missing slot falls back to "theme"
+    (led.THEME / "colors.toml").write_text('accent = "#56949f"\nmagenta = "#907aa9"\nbackground = "#faf4ed"\n')
+    assert led.theme_palette()["magenta"] == "907AA9"
+    assert led.look(dict(led.DEFAULTS, color="theme:magenta")) == ("907AA9", "static")
+    assert led.look(dict(led.DEFAULTS, color="theme:green")) == ("56949F", "static")
+    assert led.hex_color("theme:magenta") == "theme:magenta"
+    try:
+        led.hex_color("theme:brown")
+        raise AssertionError("brown is not offered")
+    except ValueError:
+        pass
     assert led.theme_name() == ""                         # no theme.name next to the theme dir
     (pathlib.Path(d) / "theme.name").write_text("tokyo-night\n")
     led.THEME = pathlib.Path(d) / "theme"

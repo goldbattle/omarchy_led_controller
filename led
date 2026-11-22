@@ -6,17 +6,17 @@ hardware match, so the panel, right-click, terminal and the night timer all obey
 same per-device switches. Commands print the resulting state as JSON.
 
   led state
-  led set [RRGGBB|theme] [-m static|breathing|rainbow|daylight] [-b 0-100] [-g 1.0-4.0]
+  led set [RRGGBB|theme] [-m static|breathing|rainbow|flux] [-b 0-100] [-g 1.0-4.0]
   led on | led off
   led device NAME on|off          per-device power switch
-  led schedule '{"auto_off": true, "off": "22:00", "on": "09:00",
-                 "daylight": [["08:00", "0040FF"], ["19:00", "FF6000"], ...]}'
+  led schedule '{"auto_off": true, "off": "22:00", "on": "09:00", "location": [lat, lon] | null}'
   led restart                     restart the OpenRGB server (re-detects devices, re-applies)
   led tick                        run every minute by led-schedule.timer
   led watch                       run by led-idle.service: dark while all monitors are off
   led restore                     run at login by openrgb.service
 """
-import argparse, json, os, re, shlex, subprocess, sys, time
+import argparse, json, math, os, re, shlex, subprocess, sys, time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Each device names its modes differently; first match wins.
@@ -32,10 +32,11 @@ DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": Tru
             "auto_off": False, "off": "22:00", "on": "09:00",
             "idle_off": True,      # all LEDs off while every monitor is DPMS-off (screensaver -> black)
             "gamma": 2.8,          # screen->LED colour depth; 2.2 = textbook sRGB, higher = deeper
-            # daylight mode: colour fades linearly between these, wrapping midnight.
-            # Fixed clock times, not real sunset; nudge them with the seasons.
-            "daylight": [["06:00", "FF0000"], ["08:00", "0040FF"], ["17:00", "0040FF"],
-                         ["19:00", "FF6000"], ["21:00", "FF0000"]]}
+            "location": None}      # flux: [lat, lon]; None = the time zone's city (tzdata)
+# flux: sun elevation (degrees) -> colour temperature (K). Day white, sunset warm,
+# dusk candlelight, then fading to pure red ("darkroom") by nautical dusk.
+FLUX = [(6, 6500), (0, 3400), (-3, 2700), (-6, 1900)]
+DARKROOM = -12
 # {"window": last seen in-window bool, "held": schedule is holding lights off,
 #  "idle": monitors are off (set by `led watch`)}.
 # In /run so a reboot forgets it and the next tick re-evaluates.
@@ -112,15 +113,65 @@ def in_window(now, off, on):
     return off <= now < on if off < on else now >= off or now < on
 
 
-def daylight(now, keys):
-    """Colour at "HH:MM" `now`, fading between [["HH:MM", "RRGGBB"], ...] keyframes."""
-    mins = lambda t: int(t[:2]) * 60 + int(t[3:])
-    pts = sorted((mins(t), [int(c[i:i + 2], 16) for i in (0, 2, 4)]) for t, c in keys)
-    n = mins(now)
-    prev = max((p for p in pts if p[0] <= n), default=pts[-1])
-    nxt = min((p for p in pts if p[0] > n), default=pts[0])
-    f = ((n - prev[0]) % 1440) / ((nxt[0] - prev[0]) % 1440 or 1440)
-    return "".join(f"{round(a + (b - a) * f):02X}" for a, b in zip(prev[1], nxt[1]))
+def zone_location():
+    """(lat, lon) of the system time zone's reference city from tzdata: no network, no setup."""
+    try:
+        zone = os.path.realpath("/etc/localtime").split("zoneinfo/", 1)[1]
+        for line in open("/usr/share/zoneinfo/zone1970.tab"):
+            f = line.split("\t")
+            if len(f) > 2 and f[2].strip() == zone:
+                m = re.fullmatch(r"([+-])(\d\d)(\d\d)(\d\d)?([+-])(\d\d\d)(\d\d)(\d\d)?", f[1])
+                dms = lambda sg, d, mi, sec: (int(d) + int(mi) / 60 + int(sec or 0) / 3600) * (-1 if sg == "-" else 1)
+                return dms(*m.group(1, 2, 3, 4)), dms(*m.group(5, 6, 7, 8))
+    except (OSError, IndexError, TypeError):
+        pass
+    return 0.0, -time.timezone / 240  # equator at the zone's longitude: crude but never crashes
+
+
+def sun_elevation(t, lat, lon):
+    """Degrees above the horizon at UTC datetime `t` (USNO low-precision formulas, ~0.1 deg)."""
+    d = (t - datetime(2000, 1, 1, 12, tzinfo=timezone.utc)).total_seconds() / 86400
+    g = math.radians(357.529 + 0.98560028 * d)
+    q = 280.459 + 0.98564736 * d
+    L = math.radians(q + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g))
+    e = math.radians(23.439 - 0.00000036 * d)
+    ra = math.atan2(math.cos(e) * math.sin(L), math.cos(L))
+    dec = math.asin(math.sin(e) * math.sin(L))
+    ha = math.radians((18.697374558 + 24.06570982441908 * d) * 15 + lon) - ra
+    lat = math.radians(lat)
+    return math.degrees(math.asin(math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(ha)))
+
+
+def kelvin(k):
+    """Colour temperature -> sRGB (Tanner Helland's fit, good for 1000-40000K)."""
+    t = k / 100
+    r = 255 if t <= 66 else 329.698727446 * (t - 60) ** -0.1332047592
+    g = 99.4708025861 * math.log(t) - 161.1195681661 if t <= 66 else 288.1221695283 * (t - 60) ** -0.0755148492
+    b = 255 if t >= 66 else 0 if t <= 19 else 138.5177312231 * math.log(t - 10) - 305.0447927307
+    return [max(0, min(255, round(c))) for c in (r, g, b)]
+
+
+def flux(el):
+    """(RRGGBB, label) for sun elevation `el`: the FLUX curve, then a fade to pure red."""
+    pts = FLUX
+    if el >= pts[0][0]:
+        k = pts[0][1]
+    elif el <= pts[-1][0]:
+        k = pts[-1][1]
+    else:
+        (e1, k1), (e0, k0) = next((p, n) for p, n in zip(pts, pts[1:]) if n[0] <= el <= p[0])
+        k = k0 + (k1 - k0) * (el - e0) / (e1 - e0)
+    rgb = kelvin(k)
+    if el < pts[-1][0]:  # past civil dusk: candlelight -> darkroom red
+        f = min(1.0, (pts[-1][0] - el) / (pts[-1][0] - DARKROOM))
+        rgb = [round(c + (r - c) * f) for c, r in zip(rgb, (255, 0, 0))]
+        return "".join(f"{c:02X}" for c in rgb), "red" if f >= 1 else f"{round(k, -2):.0f}K→red"
+    return "".join(f"{c:02X}" for c in rgb), f"{round(k, -2):.0f}K"
+
+
+def flux_now(cfg):
+    lat, lon = cfg["location"] or zone_location()
+    return flux(sun_elevation(datetime.now(timezone.utc), lat, lon))
 
 
 def theme_color():
@@ -136,8 +187,8 @@ def theme_color():
 
 def look(cfg):
     """(colour, mode) to show right now."""
-    if cfg["mode"] == "daylight":
-        return daylight(time.strftime("%H:%M"), cfg["daylight"]), "static"
+    if cfg["mode"] == "flux":
+        return flux_now(cfg)[0], "static"
     return theme_color() if cfg["color"] == "theme" else cfg["color"], cfg["mode"]
 
 
@@ -204,7 +255,7 @@ def main():
         sub.add_parser(name)
     s = sub.add_parser("set")
     s.add_argument("color", nargs="?", type=lambda c: "theme" if c == "theme" else re.fullmatch(r"#?([0-9a-fA-F]{6})", c)[1].upper())
-    s.add_argument("-m", "--mode", choices=["static", "breathing", "rainbow", "daylight"])
+    s.add_argument("-m", "--mode", choices=["static", "breathing", "rainbow", "flux"])
     s.add_argument("-b", "--brightness", type=int, choices=range(0, 101), metavar="0-100")
     s.add_argument("-g", "--gamma", type=float, metavar="1.0-4.0", help="colour depth")
     d = sub.add_parser("device")
@@ -222,6 +273,8 @@ def main():
     if a.cmd == "watch":
         watch()
     cfg = {k: v for k, v in load(CONFIG, DEFAULTS).items() if k in DEFAULTS}
+    if cfg["mode"] == "daylight":  # renamed
+        cfg["mode"] = "flux"
     rt = load(RUNTIME, RT_DEFAULT)
     devs = parse(openrgb("-ld"))
     names = {d["name"] for d in devs}
@@ -244,26 +297,26 @@ def main():
     elif a.cmd == "schedule":
         try:
             new = json.loads(a.json)
-            keys = new.get("daylight", cfg["daylight"])
+            loc = new.get("location", cfg["location"])
             ok = (isinstance(new, dict) and isinstance(new.get("auto_off", cfg["auto_off"]), bool)
                   and isinstance(new.get("idle_off", cfg["idle_off"]), bool)
                   and all(HHMM.fullmatch(str(new.get(k, cfg[k]))) for k in ("off", "on"))
-                  and isinstance(keys, list) and keys and all(
-                      isinstance(k, list) and len(k) == 2 and HHMM.fullmatch(str(k[0]))
-                      and re.fullmatch(r"[0-9A-Fa-f]{6}", str(k[1])) for k in keys))
+                  and (loc is None or (isinstance(loc, list) and len(loc) == 2
+                       and all(isinstance(v, (int, float)) for v in loc)
+                       and -90 <= loc[0] <= 90 and -180 <= loc[1] <= 180)))
         except (ValueError, AttributeError):
             ok = False
         if not ok:
             sys.exit('expected {"auto_off": bool, "off": "HH:MM", "on": "HH:MM", '
-                     '"idle_off": bool, "daylight": [["HH:MM", "RRGGBB"], ...]} (all keys optional)')
-        cfg.update({k: new[k] for k in ("auto_off", "off", "on", "idle_off", "daylight") if k in new})
+                     '"idle_off": bool, "location": [lat, lon] | null} (all keys optional)')
+        cfg.update({k: new[k] for k in ("auto_off", "off", "on", "idle_off", "location") if k in new})
 
     if a.cmd in ("tick", "schedule", "restore"):
         window = cfg["auto_off"] and in_window(time.strftime("%H:%M"), cfg["off"], cfg["on"])
         changed = window != rt["window"]  # act on transitions only, so manual changes stick
         if changed or a.cmd == "restore":
             rt.update(window=window, held=window)
-        drifted = look(cfg)[0] != rt.get("shown")  # daylight fade step or theme change
+        drifted = look(cfg)[0] != rt.get("shown")  # flux step or theme change
         if a.cmd == "tick" and not changed and not drifted:
             return
 
@@ -272,7 +325,8 @@ def main():
         sync(cfg, rt, devs)
         save(RUNTIME, rt)  # after sync: a failed apply is retried next tick
     if a.cmd != "tick":
-        print(json.dumps({**cfg, "held": rt["held"], "shown": look(cfg)[0], "devices": devs}))
+        print(json.dumps({**cfg, "held": rt["held"], "shown": look(cfg)[0], "flux": flux_now(cfg)[1],
+                          "devices": devs}))
 
 
 if __name__ == "__main__":

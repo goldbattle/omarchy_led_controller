@@ -7,7 +7,7 @@ right-click, terminal, night timer) goes through `led`, which makes the hardware
 ```
 ./install.sh                               # test, copy into Omarchy, install services + hook, reload UI if it changed
 led state
-led set 8000FF -m breathing -b 60          # modes: static breathing rainbow daylight
+led set 8000FF -m breathing -b 60          # modes: static breathing rainbow flux
 led set theme                              # follow the Omarchy theme colour
 led on | led off
 led device "Corsair Commander Pro" off     # per-device switch
@@ -28,9 +28,11 @@ led restart                                # restart OpenRGB (re-detect + re-app
   `hyprctl monitors` every 2s and darkens everything once all monitors are DPMS-off, i.e. after
   the screensaver/lock blanks them; lights return within ~2s of waking.
 - **Advanced** (bottom of the panel): custom hex and the auto-off times.
-- **Daylight** fades between clock keyframes (default: red until 06:00 → blue 08:00–17:00 →
-  orange 19:00 → red 21:00). Fixed times, not real sunset; tune them with
-  `led schedule '{"daylight": [["07:30","FF0000"], ["09:00","0040FF"], ...]}'`.
+- **Flux** follows the sun, not the clock: white (6500K) while it's >6 deg up, 3400K at sunset,
+  2700K, 1900K (candlelight) at civil dusk, then fading to pure red by nautical dusk (-12 deg);
+  mornings mirror it. The chip shows the current target. Location defaults to the time zone's
+  reference city from tzdata (`/usr/share/zoneinfo/zone1970.tab`); override with
+  `led schedule '{"location": [lat, lon]}'`.
 
 ## Files
 | File | Installed to |
@@ -38,7 +40,7 @@ led restart                                # restart OpenRGB (re-detect + re-app
 | `manifest.json`, `Panel.qml`, `led` | `~/.config/omarchy/plugins/com.pgeneva.omarchy_led_controller/` (`led` also linked into `~/.local/bin`) |
 | `systemd/openrgb.service` | user unit: OpenRGB server, runs `led restore` at login |
 | `systemd/led-idle.service` | user unit (graphical session): `led watch` |
-| `systemd/led-schedule.{service,timer}` | user units: `led tick` every minute (auto-off, daylight fade, theme drift) |
+| `systemd/led-schedule.{service,timer}` | user units: `led tick` every minute (auto-off, flux steps, theme drift) |
 | `hooks/led-theme-set` | `~/.config/omarchy/hooks/theme-set.d/` |
 
 The plugin is *copied*, not symlinked: the shell's inotify watcher doesn't follow symlinks. Its
@@ -49,7 +51,7 @@ restarts the shell when `Panel.qml`/`manifest.json` changed (`led`-only changes 
 | Device | Bus | Status |
 |---|---|---|
 | EVGA RTX 3080 FTW3 Ultra LHR (3842:4897) | NVIDIA i2c, addr 0x2D | works |
-| Corsair Commander PRO (1b1c:0c10) | USB HID | works; LED strips, both headers sized to **32** LEDs (it can't sense what's attached). At 204 Direct/Static still worked but every hardware effect (Breathe/Rainbow) rendered dark. If the last LEDs stay dark raise it (strips are 10 LEDs each): `openrgb -d "Corsair Commander Pro" -z 0 -sz N -z 1 -sz N` |
+| Corsair Commander PRO (1b1c:0c10) | USB HID | works; LED strips, both headers sized to **32** LEDs (it can't sense what's attached). At 204 Direct/Static still worked but every hardware effect (Breathe/Rainbow) rendered dark. If the last LEDs stay dark raise it (strips are 10 LEDs each): `openrgb -d "Corsair Commander Pro" -z 0 -sz N -z 1 -sz N && led restart` (without the restart the server ignores later mode changes on it) |
 | Corsair H150i Platinum (1b1c:0c12) | USB HID | works (OpenRGB calls it "H150i PRO RGB") |
 | Logitech G502 Proteus Spectrum | USB HID | works |
 | ASUS PRIME X299-A Aura | SMBus i801 (i2c-5) | **not detected**: nothing at 0x40/0x4E; 0x4F answers but isn't ENE. Check BIOS onboard-LED setting / Aura firmware before any manual probing (SMBus probing can brick RAM SPD). |

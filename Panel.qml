@@ -46,8 +46,8 @@ Panel {
   function setLook(color, mode, brightness) { run(["set", color, "-m", mode, "-b", String(brightness)]) }
   function setSchedule(patch) { run(["schedule", JSON.stringify(patch)]) }
   function has(list, name) { return list.indexOf(name) !== -1 }
-  // Picking a colour while in Daylight means "I want this colour": drop to Static.
-  function colorMode() { return st.mode === "daylight" ? "static" : st.mode }
+  // Picking a colour while in Flux means "I want this colour": drop to Static.
+  function colorMode() { return st.mode === "flux" ? "static" : st.mode }
 
   Component.onCompleted: run(["state"])  // so right-click works before the panel is ever opened
   onOpenedChanged: if (opened) run(["state"])
@@ -130,8 +130,9 @@ Panel {
               required property string modelData
               width: Style.space(26); height: width; radius: width / 2
               color: modelData === "theme" ? Color.accent : "#" + modelData
-              border.width: root.st.color === modelData ? 3 : 1
-              border.color: root.st.color === modelData ? root.foreground : root.dim
+              readonly property bool picked: root.st.mode !== "flux" && root.st.color === modelData
+              border.width: picked ? 3 : 1
+              border.color: picked ? root.foreground : root.dim
               MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
@@ -153,8 +154,8 @@ Panel {
 
         ButtonGroup {
           options: [{ value: "static", label: "Static" }, { value: "breathing", label: "Breathe" },
-                    { value: "rainbow", label: "Rainbow" }, { value: "daylight", label: "Daylight",
-                      tooltip: "Blue by day, orange at sunset, red at night (times in ~/.config/led.json)" }]
+                    { value: "rainbow", label: "Rainbow" }, { value: "flux", label: "Flux" + (root.st.flux ? " · " + root.st.flux : ""),
+                      tooltip: "Follows the sun: white by day, warm at sunset, red after dusk" }]
           value: root.st.power ? root.st.mode : ""
           focusable: false
           foreground: root.foreground
@@ -298,7 +299,8 @@ Panel {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "Daylight fade times: led schedule '{\"daylight\": [[\"HH:MM\", \"RRGGBB\"], ...]}'"
+            text: "Flux uses " + (root.st.location ? "your location " + root.st.location.join(", ")
+                  : "your time zone's city") + ". Elsewhere? led schedule '{\"location\": [lat, lon]}'"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

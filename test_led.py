@@ -56,14 +56,19 @@ assert not led.in_window("09:00", "22:00", "09:00") and not led.in_window("21:59
 assert led.in_window("13:00", "12:00", "14:00") and not led.in_window("14:00", "12:00", "14:00")
 assert not led.in_window("12:00", "12:00", "12:00")
 
-# daylight fade: keyframes hold, interpolate, and wrap past midnight
-K = led.DEFAULTS["daylight"]
-assert led.daylight("12:00", K) == "0040FF"           # midday blue
-assert led.daylight("17:00", K) == "0040FF" and led.daylight("19:00", K) == "FF6000"
-assert led.daylight("18:00", K) == "805080"           # halfway blue -> orange
-assert led.daylight("02:00", K) == "FF0000"           # night red, across midnight
-assert led.daylight("07:00", K) == "802080"           # sunrise halfway red -> blue
-assert led.daylight("05:00", [["06:00", "000000"]]) == "000000"  # single keyframe
+# flux: sun position, colour temperature, and the curve
+from datetime import datetime, timezone
+# LA, June solstice ~solar noon: 90 - 34.05 + 23.44 = 79.4 deg; equator at equinox noon ~ overhead
+assert abs(led.sun_elevation(datetime(2024, 6, 21, 19, 57, tzinfo=timezone.utc), 34.05, -118.24) - 79.4) < 0.5
+assert led.sun_elevation(datetime(2024, 3, 20, 12, 7, tzinfo=timezone.utc), 0, 0) > 88
+assert led.sun_elevation(datetime(2024, 6, 21, 8, 0, tzinfo=timezone.utc), 34.05, -118.24) < -20  # LA 1am
+assert led.kelvin(6500) == [255, 254, 250] and led.kelvin(1900) == [255, 132, 0]
+assert led.flux(30) == (led.flux(6)[0], "6500K")             # daytime: white
+assert led.flux(0)[1] == "3400K" and led.flux(-6)[1] == "1900K"
+assert led.flux(1.5)[1] == "4200K"                           # warming toward sunset
+assert led.flux(-9)[1] == "1900K→red" and led.flux(-9)[0] == "FF4200"
+assert led.flux(-12) == ("FF0000", "red") and led.flux(-40) == ("FF0000", "red")
+assert led.zone_location() is not None
 
 # theme colour: the accent from colors.toml, never keyboard.rgb
 import tempfile

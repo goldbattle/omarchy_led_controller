@@ -11,13 +11,13 @@ led set 8000FF -m breathing -b 60          # modes: static breathing rainbow day
 led set theme                              # follow the Omarchy theme colour
 led on | led off
 led device "Corsair Commander Pro" off     # per-device switch
-led night "Corsair H150i PRO RGB" off      # exclude a device from auto-off
 led schedule '{"auto_off": true, "off": "22:00", "on": "09:00"}'
 led restart                                # restart OpenRGB (re-detect + re-apply)
 ```
 
-- **Auto-off** acts only when the window starts/ends, so turning lights on mid-window sticks
-  until morning. It stacks on any mode: auto-off devices go dark, the rest keep going.
+- **Auto-off** darkens every device for the window; at the end only devices whose switch is on
+  come back. It acts only when the window starts/ends, so turning lights on mid-window sticks
+  until morning. Works with any mode.
 - **Theme** colour is `accent` from `~/.local/state/omarchy/current/theme/colors.toml`, the colour
   the desktop shows. Not `keyboard.rgb`: some themes override it (tokyo-night: magenta vs blue accent).
   A `theme-set` hook re-applies ~3s after a switch (it runs after Omarchy's own retint steps).

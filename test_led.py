@@ -37,13 +37,13 @@ assert led.build(devs, "FFFFFF", "off", 100) == [
     ["-d", "1", "-m", "Direct", "-c", "000000"],
     ["-d", "3", "-m", "Direct", "-c", "000000"]]
 
-# which devices are lit: power, per-device switch, night hold, keep_on
+# which devices are lit: power, per-device switch, night hold, monitors off
 GPU, CMD, AIO = (d["name"] for d in devs)
-cfg = dict(led.DEFAULTS, disabled=[CMD], keep_on=[AIO])
+cfg = dict(led.DEFAULTS, disabled=[CMD])
 names = lambda held, idle=False: [d["name"] for d in led.lit(cfg, {"held": held, "idle": idle}, devs)]
 assert names(False) == [GPU, AIO]          # Commander switched off
-assert names(True) == [AIO]                # night: only keep_on survives, still minus disabled
-assert names(False, idle=True) == []       # monitors off: everything dark, keep_on included
+assert names(True) == []                   # night: everything dark
+assert names(False, idle=True) == []       # monitors off: everything dark
 cfg["idle_off"] = False
 assert names(False, idle=True) == [GPU, AIO]  # ...unless the Advanced toggle is off
 cfg["idle_off"] = True

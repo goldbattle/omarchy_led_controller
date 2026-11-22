@@ -17,7 +17,7 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   property var st: ({ color: "8000FF", mode: "static", brightness: 100, power: true, held: false,
-                      disabled: [], keep_on: [], auto_off: false, off: "22:00", on: "09:00", devices: [] })
+                      disabled: [], auto_off: false, off: "22:00", on: "09:00", devices: [] })
   property string error: ""
   property var queue: []
   property int liveBrightness: st.brightness
@@ -293,28 +293,6 @@ Panel {
               onEditingFinished: if (new RegExp(root.timeRe).test(text) && text !== root.st.on) root.setSchedule({ on: text })
             }
             Item { Layout.fillWidth: true }
-          }
-
-          Text { text: "Auto off applies to"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
-          Repeater {
-            model: root.st.devices
-            RowLayout {
-              required property var modelData
-              readonly property bool isNight: !root.has(root.st.keep_on, modelData.name)
-              width: column.width
-              Text {
-                Layout.fillWidth: true
-                text: modelData.name
-                elide: Text.ElideRight
-                color: isNight ? root.foreground : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-              }
-              ToggleSwitch {
-                checked: isNight
-                onToggled: root.run(["night", modelData.name, isNight ? "off" : "on"])
-              }
-            }
           }
 
           Text {

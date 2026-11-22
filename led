@@ -9,7 +9,6 @@ same per-device switches. Commands print the resulting state as JSON.
   led set [RRGGBB|theme] [-m static|breathing|rainbow|daylight] [-b 0-100] [-g 1.0-4.0]
   led on | led off
   led device NAME on|off          per-device power switch
-  led night NAME on|off           does auto-off apply to this device
   led schedule '{"auto_off": true, "off": "22:00", "on": "09:00",
                  "daylight": [["08:00", "0040FF"], ["19:00", "FF6000"], ...]}'
   led restart                     restart the OpenRGB server (re-detects devices, re-applies)
@@ -32,7 +31,6 @@ DEFAULTS = {"color": "8000FF", "mode": "static", "brightness": 100, "power": Tru
             "disabled": [],        # per-device switch off
             "auto_off": False, "off": "22:00", "on": "09:00",
             "idle_off": True,      # all LEDs off while every monitor is DPMS-off (screensaver -> black)
-            "keep_on": [],         # devices the night schedule leaves alone
             "gamma": 2.8,          # screen->LED colour depth; 2.2 = textbook sRGB, higher = deeper
             # daylight mode: colour fades linearly between these, wrapping midnight.
             # Fixed clock times, not real sunset; nudge them with the seasons.
@@ -136,11 +134,10 @@ def look(cfg):
 
 
 def lit(cfg, rt, devs):
-    """The one rule for which devices should be on."""
-    if not cfg["power"] or (rt.get("idle") and cfg["idle_off"]):
+    """The one rule for which devices should be on: night/idle darken all, switches gate the rest."""
+    if not cfg["power"] or rt["held"] or (rt.get("idle") and cfg["idle_off"]):
         return []
-    return [d for d in devs if d["name"] not in cfg["disabled"]
-            and not (rt["held"] and d["name"] not in cfg["keep_on"])]
+    return [d for d in devs if d["name"] not in cfg["disabled"]]
 
 
 def screens_off():
@@ -202,10 +199,9 @@ def main():
     s.add_argument("-m", "--mode", choices=["static", "breathing", "rainbow", "daylight"])
     s.add_argument("-b", "--brightness", type=int, choices=range(0, 101), metavar="0-100")
     s.add_argument("-g", "--gamma", type=float, metavar="1.0-4.0", help="colour depth")
-    for name in ("device", "night"):
-        d = sub.add_parser(name)
-        d.add_argument("name")
-        d.add_argument("state", choices=["on", "off"])
+    d = sub.add_parser("device")
+    d.add_argument("name")
+    d.add_argument("state", choices=["on", "off"])
     sub.add_parser("schedule").add_argument("json")
     a = p.parse_args()
 
@@ -217,7 +213,8 @@ def main():
 
     if a.cmd == "watch":
         watch()
-    cfg, rt = load(CONFIG, DEFAULTS), load(RUNTIME, RT_DEFAULT)
+    cfg = {k: v for k, v in load(CONFIG, DEFAULTS).items() if k in DEFAULTS}
+    rt = load(RUNTIME, RT_DEFAULT)
     devs = parse(openrgb("-ld"))
     names = {d["name"] for d in devs}
     if getattr(a, "name", None) and a.name not in names:
@@ -236,8 +233,6 @@ def main():
         rt["held"] = rt["held"] and a.cmd == "off"
     elif a.cmd == "device":
         cfg["disabled"] = toggle(cfg["disabled"], a.name, a.state == "off")
-    elif a.cmd == "night":
-        cfg["keep_on"] = toggle(cfg["keep_on"], a.name, a.state == "off")
     elif a.cmd == "schedule":
         try:
             new = json.loads(a.json)
